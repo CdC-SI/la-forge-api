@@ -21,11 +21,12 @@ public record ChallengeDto(
         int participantCount,
         boolean responsesUnlocked) {
 
-    public static ChallengeDto from(Challenge challenge, int participantCount, boolean responsesUnlocked) {
+    public static ChallengeDto from(
+            Challenge challenge, int participantCount, boolean responsesUnlocked, boolean completed) {
         return new ChallengeDto(
                 challenge.getId(),
                 challenge.getTitle(),
-                ExerciseSummaryDto.from(challenge.getExerciseVersion()),
+                ExerciseSummaryDto.from(challenge.getExerciseVersion(), completed),
                 challenge.getCreator().getId(),
                 challenge.getClosesAt(),
                 challenge.getState(),

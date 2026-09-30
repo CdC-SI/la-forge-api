@@ -26,6 +26,7 @@ import ch.admin.zas.jweb.laforge.common.security.SecureTokenFactory;
 import ch.admin.zas.jweb.laforge.practice.domain.Attempt;
 import ch.admin.zas.jweb.laforge.practice.domain.AttemptStatus;
 import ch.admin.zas.jweb.laforge.practice.repository.AttemptRepository;
+import ch.admin.zas.jweb.laforge.practice.service.ExerciseCompletionService;
 import ch.admin.zas.jweb.laforge.security.dto.CurrentAccountDto;
 import ch.admin.zas.jweb.laforge.security.repository.AccountRepository;
 import java.time.Clock;
@@ -52,6 +53,7 @@ public class CollectiveService {
     private final ChallengeParticipantRepository challengeParticipantRepository;
     private final ExerciseVersionRepository exerciseVersionRepository;
     private final AttemptRepository attemptRepository;
+    private final ExerciseCompletionService exerciseCompletionService;
     private final DiscussionCommentRepository discussionCommentRepository;
     private final AccountRepository accountRepository;
     private final SecureTokenFactory secureTokenFactory;
@@ -62,6 +64,7 @@ public class CollectiveService {
             ChallengeParticipantRepository challengeParticipantRepository,
             ExerciseVersionRepository exerciseVersionRepository,
             AttemptRepository attemptRepository,
+            ExerciseCompletionService exerciseCompletionService,
             DiscussionCommentRepository discussionCommentRepository,
             AccountRepository accountRepository,
             SecureTokenFactory secureTokenFactory,
@@ -70,6 +73,7 @@ public class CollectiveService {
         this.challengeParticipantRepository = challengeParticipantRepository;
         this.exerciseVersionRepository = exerciseVersionRepository;
         this.attemptRepository = attemptRepository;
+        this.exerciseCompletionService = exerciseCompletionService;
         this.discussionCommentRepository = discussionCommentRepository;
         this.accountRepository = accountRepository;
         this.secureTokenFactory = secureTokenFactory;
@@ -126,8 +130,12 @@ public class CollectiveService {
         var pageable = PageRequest.of(0, pageQuery.limit() + 1, Sort.by(Sort.Order.desc("closesAt"), Sort.Order.asc("id")));
         var rows = challengeRepository.findAll(spec, pageable).getContent();
         var hasMore = rows.size() > pageQuery.limit();
-        var items = (hasMore ? rows.subList(0, pageQuery.limit()) : rows).stream()
-                .map(challenge -> toDto(challenge, account))
+        var pageRows = hasMore ? rows.subList(0, pageQuery.limit()) : rows;
+        var completed = exerciseCompletionService.completedExerciseIds(account.id(),
+                pageRows.stream().map(challenge -> challenge.getExerciseVersion().getExercise().getId()).toList());
+        var items = pageRows.stream()
+                .map(challenge -> toDto(challenge, account,
+                        completed.contains(challenge.getExerciseVersion().getExercise().getId())))
                 .toList();
         String nextCursor = null;
         if (hasMore) {
@@ -284,11 +292,17 @@ public class CollectiveService {
     }
 
     private ChallengeDto toDto(Challenge challenge, CurrentAccountDto account) {
+        var exerciseId = challenge.getExerciseVersion().getExercise().getId();
+        return toDto(challenge, account,
+                exerciseCompletionService.completedExerciseIds(account.id(), List.of(exerciseId)).contains(exerciseId));
+    }
+
+    private ChallengeDto toDto(Challenge challenge, CurrentAccountDto account, boolean completed) {
         var participantCount = (int) challengeParticipantRepository.countByChallenge_Id(challenge.getId());
         var responsesUnlocked = attemptRepository
                 .findByChallengeIdAndLearner_Id(challenge.getId(), account.id())
                 .filter(attempt -> attempt.getStatus() == AttemptStatus.SUBMITTED)
                 .isPresent();
-        return ChallengeDto.from(challenge, participantCount, responsesUnlocked);
+        return ChallengeDto.from(challenge, participantCount, responsesUnlocked, completed);
     }
 }

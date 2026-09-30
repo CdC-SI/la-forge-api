@@ -16,6 +16,8 @@ import ch.admin.zas.jweb.laforge.common.page.CursorCodec;
 import ch.admin.zas.jweb.laforge.common.page.KeysetPredicates;
 import ch.admin.zas.jweb.laforge.common.page.Page;
 import ch.admin.zas.jweb.laforge.common.page.PageQuery;
+import ch.admin.zas.jweb.laforge.practice.service.ExerciseCompletionService;
+import ch.admin.zas.jweb.laforge.security.dto.CurrentAccountDto;
 import java.time.OffsetDateTime;
 import java.util.HashMap;
 import java.util.List;
@@ -38,10 +40,13 @@ public class CatalogService {
 
     private final TopicRepository topicRepository;
     private final ExerciseVersionRepository exerciseVersionRepository;
+    private final ExerciseCompletionService exerciseCompletionService;
 
-    public CatalogService(TopicRepository topicRepository, ExerciseVersionRepository exerciseVersionRepository) {
+    public CatalogService(TopicRepository topicRepository, ExerciseVersionRepository exerciseVersionRepository,
+            ExerciseCompletionService exerciseCompletionService) {
         this.topicRepository = topicRepository;
         this.exerciseVersionRepository = exerciseVersionRepository;
+        this.exerciseCompletionService = exerciseCompletionService;
     }
 
     /**
@@ -92,7 +97,7 @@ public class CatalogService {
      * limite demandée lorsqu'il est utilisé, simplification documentée pour la v1.
      */
     public Page<ExerciseSummaryDto> listExercises(
-            PageQuery pageQuery, ExerciseType type, Difficulty difficulty, UUID topicId, String technology, String q) {
+            CurrentAccountDto account, PageQuery pageQuery, ExerciseType type, Difficulty difficulty, UUID topicId, String technology, String q) {
         var filters = new HashMap<String, Object>();
         filters.put("type", type);
         filters.put("difficulty", difficulty);
@@ -143,7 +148,11 @@ public class CatalogService {
 
         var hasMore = rows.size() > pageQuery.limit();
         var pageRows = hasMore ? filtered.subList(0, Math.min(filtered.size(), pageQuery.limit())) : filtered;
-        var items = pageRows.stream().map(ExerciseSummaryDto::from).toList();
+        var completed = exerciseCompletionService.completedExerciseIds(
+                account.id(), pageRows.stream().map(version -> version.getExercise().getId()).toList());
+        var items = pageRows.stream()
+                .map(version -> ExerciseSummaryDto.from(version, completed.contains(version.getExercise().getId())))
+                .toList();
         String nextCursor = null;
         if (hasMore) {
             var last = rows.get(pageQuery.limit() - 1);
@@ -153,20 +162,22 @@ public class CatalogService {
     }
 
     /** @throws NotFoundException si l'exercice n'existe pas ou n'a aucune version publiée */
-    public ExerciseDto getLatestExercise(UUID exerciseId) {
+    public ExerciseDto getLatestExercise(CurrentAccountDto account, UUID exerciseId) {
         var version = exerciseVersionRepository
                 .findFirstByExercise_IdAndPublishedAtIsNotNullOrderByVersionNumberDesc(exerciseId)
                 .orElseThrow(() -> new NotFoundException("Aucune version publiée pour cet exercice."));
-        return ExerciseDto.from(version);
+        return ExerciseDto.from(version,
+                exerciseCompletionService.completedExerciseIds(account.id(), List.of(exerciseId)).contains(exerciseId));
     }
 
     /** @throws NotFoundException si cette version n'existe pas ou n'est pas publiée */
-    public ExerciseDto getExerciseVersion(UUID exerciseId, int versionNumber) {
+    public ExerciseDto getExerciseVersion(CurrentAccountDto account, UUID exerciseId, int versionNumber) {
         var version = exerciseVersionRepository
                 .findByExercise_IdAndVersionNumber(exerciseId, versionNumber)
                 .filter(ExerciseVersion::isPublished)
                 .orElseThrow(() -> new NotFoundException("Cette version d'exercice n'existe pas ou n'est pas publiée."));
-        return ExerciseDto.from(version);
+        return ExerciseDto.from(version,
+                exerciseCompletionService.completedExerciseIds(account.id(), List.of(exerciseId)).contains(exerciseId));
     }
 
     private static Specification<ExerciseVersion> latestPublishedVersion() {

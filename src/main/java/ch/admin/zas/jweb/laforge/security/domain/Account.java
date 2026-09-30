@@ -2,6 +2,7 @@ package ch.admin.zas.jweb.laforge.security.domain;
 
 import ch.admin.zas.jweb.laforge.common.error.ForbiddenException;
 import ch.admin.zas.jweb.laforge.common.error.InvalidStateException;
+import ch.admin.zas.jweb.laforge.common.error.ValidationFailedException;
 import ch.admin.zas.jweb.laforge.common.persistence.BaseEntity;
 import jakarta.persistence.CollectionTable;
 import jakarta.persistence.Column;
@@ -14,6 +15,7 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 import java.util.LinkedHashSet;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -101,5 +103,18 @@ public class Account extends BaseEntity {
 
     public Set<Role> getRoles() {
         return Set.copyOf(roles);
+    }
+
+    /** Remplace les attributions, après contrôle administratif dans la transaction appelante. */
+    public void replaceRoles(Set<Role> newRoles) {
+        if (status != AccountStatus.ACTIVE) {
+            throw new InvalidStateException("Seuls les comptes actifs peuvent recevoir des rôles.");
+        }
+        if (newRoles == null || !newRoles.contains(Role.LEARNER) || newRoles.stream().anyMatch(Objects::isNull)) {
+            throw new ValidationFailedException(
+                    "Les rôles doivent contenir LEARNER et uniquement des rôles reconnus.");
+        }
+        roles.clear();
+        roles.addAll(newRoles);
     }
 }

@@ -4,6 +4,7 @@ import ch.admin.zas.jweb.laforge.common.page.CursorCodec;
 import ch.admin.zas.jweb.laforge.common.page.KeysetPredicates;
 import ch.admin.zas.jweb.laforge.common.page.Page;
 import ch.admin.zas.jweb.laforge.common.page.PageQuery;
+import ch.admin.zas.jweb.laforge.practice.service.ExerciseCompletionService;
 import ch.admin.zas.jweb.laforge.review.domain.ReviewItem;
 import ch.admin.zas.jweb.laforge.review.domain.ReviewState;
 import ch.admin.zas.jweb.laforge.review.dto.ReviewItemDto;
@@ -16,6 +17,7 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.PredicateSpecification;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,10 +33,13 @@ public class ReviewService {
 
     private final ReviewItemRepository reviewItemRepository;
     private final Clock clock;
+    private final ExerciseCompletionService exerciseCompletionService;
 
-    public ReviewService(ReviewItemRepository reviewItemRepository, Clock clock) {
+    public ReviewService(ReviewItemRepository reviewItemRepository, Clock clock,
+            ExerciseCompletionService exerciseCompletionService) {
         this.reviewItemRepository = reviewItemRepository;
         this.clock = clock;
+        this.exerciseCompletionService = exerciseCompletionService;
     }
 
     /** Fiches de l'appelant, triées par {@code dueAt} croissant puis id ; {@code state} par défaut à {@code DUE}. */
@@ -53,19 +58,32 @@ public class ReviewService {
         }
 
         var now = OffsetDateTime.now(clock);
-        Specification<ReviewItem> spec = (root, query, cb) -> cb.equal(root.get("learner").get("id"), learner.id());
-        spec = spec.and(switch (effectiveState) {
-            case COMPLETED -> (root, query, cb) -> cb.isNotNull(root.get("completedAt"));
-            case DUE -> (root, query, cb) -> cb.and(cb.isNull(root.get("completedAt")), cb.lessThanOrEqualTo(root.get("dueAt"), now));
-            case SCHEDULED -> (root, query, cb) -> cb.and(cb.isNull(root.get("completedAt")), cb.greaterThan(root.get("dueAt"), now));
-        });
-        spec = spec.and(KeysetPredicates.afterAscending("dueAt", afterDueAt, afterId));
+        PredicateSpecification<ReviewItem> ownedByLearner =
+                (root, cb) -> cb.equal(root.get("learner").get("id"), learner.id());
+        PredicateSpecification<ReviewItem> matchesState = (root, cb) -> {
+            var completedAt = root.<OffsetDateTime>get("completedAt");
+            var dueAt = root.<OffsetDateTime>get("dueAt");
+            return switch (effectiveState) {
+                case COMPLETED -> cb.isNotNull(completedAt);
+                case DUE -> cb.and(
+                        cb.isNull(completedAt), cb.lessThanOrEqualTo(dueAt, now));
+                case SCHEDULED -> cb.and(
+                        cb.isNull(completedAt), cb.greaterThan(dueAt, now));
+            };
+        };
+        var spec = Specification.where(ownedByLearner)
+                .and(matchesState)
+                .and(KeysetPredicates.afterAscending("dueAt", afterDueAt, afterId));
 
         var pageable = PageRequest.of(0, pageQuery.limit() + 1, Sort.by(Sort.Order.asc("dueAt"), Sort.Order.asc("id")));
         var rows = reviewItemRepository.findAll(spec, pageable).getContent();
         var hasMore = rows.size() > pageQuery.limit();
-        var items = (hasMore ? rows.subList(0, pageQuery.limit()) : rows).stream()
-                .map(item -> ReviewItemDto.from(item, clock))
+        var pageRows = hasMore ? rows.subList(0, pageQuery.limit()) : rows;
+        var completed = exerciseCompletionService.completedExerciseIds(learner.id(),
+                pageRows.stream().map(item -> item.getExerciseVersion().getExercise().getId()).toList());
+        var items = pageRows.stream()
+                .map(item -> ReviewItemDto.from(item, clock,
+                        completed.contains(item.getExerciseVersion().getExercise().getId())))
                 .toList();
         String nextCursor = null;
         if (hasMore) {

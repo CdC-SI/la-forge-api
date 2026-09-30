@@ -9,6 +9,8 @@ import ch.admin.zas.jweb.laforge.catalog.service.CatalogService;
 import ch.admin.zas.jweb.laforge.common.domain.Difficulty;
 import ch.admin.zas.jweb.laforge.common.page.Page;
 import ch.admin.zas.jweb.laforge.common.page.PageQuery;
+import ch.admin.zas.jweb.laforge.security.dto.CurrentAccountDto;
+import ch.admin.zas.jweb.laforge.security.web.CurrentAccount;
 import jakarta.validation.Valid;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
@@ -46,6 +48,7 @@ public class CatalogController {
 
     @GetMapping("/exercises")
     public Page<ExerciseSummaryDto> listExercises(
+            @CurrentAccount CurrentAccountDto account,
             @RequestParam(required = false) Integer limit,
             @RequestParam(required = false) String cursor,
             @RequestParam(required = false) ExerciseType type,
@@ -53,16 +56,17 @@ public class CatalogController {
             @RequestParam(required = false) UUID topicId,
             @RequestParam(required = false) String technology,
             @RequestParam(required = false) String q) {
-        return catalogService.listExercises(PageQuery.of(limit, cursor), type, difficulty, topicId, technology, q);
+        return catalogService.listExercises(account, PageQuery.of(limit, cursor), type, difficulty, topicId, technology, q);
     }
 
     @GetMapping("/exercises/{exerciseId}")
-    public ExerciseDto getLatestExercise(@PathVariable UUID exerciseId) {
-        return catalogService.getLatestExercise(exerciseId);
+    public ExerciseDto getLatestExercise(@CurrentAccount CurrentAccountDto account, @PathVariable UUID exerciseId) {
+        return catalogService.getLatestExercise(account, exerciseId);
     }
 
     @GetMapping("/exercises/{exerciseId}/versions/{version}")
-    public ExerciseDto getExerciseVersion(@PathVariable UUID exerciseId, @PathVariable int version) {
-        return catalogService.getExerciseVersion(exerciseId, version);
+    public ExerciseDto getExerciseVersion(
+            @CurrentAccount CurrentAccountDto account, @PathVariable UUID exerciseId, @PathVariable int version) {
+        return catalogService.getExerciseVersion(account, exerciseId, version);
     }
 }

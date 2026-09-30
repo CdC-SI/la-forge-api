@@ -66,7 +66,7 @@ class CollectiveControllerTest {
     void createChallenge_success_returns201() throws Exception {
         var exerciseSummary = new ExerciseSummaryDto(
                 UUID.randomUUID(), 1, "Titre", ExerciseType.QUIZ, Difficulty.BEGINNER, List.of(), 10, List.of(),
-                OffsetDateTime.now());
+                OffsetDateTime.now(), true);
         var challenge = new ChallengeDto(
                 UUID.randomUUID(), "Défi", exerciseSummary, ACCOUNT_ID, OffsetDateTime.now().plusDays(1),
                 ChallengeState.OPEN, 1, false);
@@ -83,6 +83,7 @@ class CollectiveControllerTest {
                         .content(body))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.challenge.title").value("Défi"))
+                .andExpect(jsonPath("$.challenge.exercise.completed").value(true))
                 .andExpect(jsonPath("$.joinCode").exists());
     }
 

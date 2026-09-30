@@ -304,7 +304,7 @@ public class PracticeService {
         if (existing.isEmpty()) {
             var created = reviewItemRepository.save(new ReviewItem(
                     attempt.getLearner(), attempt.getExerciseVersion(), attempt, dueAt, ReviewReason.SELF_ASSESSMENT));
-            return ReviewItemDto.from(created, clock);
+            return ReviewItemDto.from(created, clock, attempt.getStatus() == AttemptStatus.SUBMITTED);
         }
 
         var reviewItem = existing.get();
@@ -319,7 +319,7 @@ public class PracticeService {
         if (previousMastery != mastery) {
             reviewItem.reschedule(dueAt, ReviewReason.SELF_ASSESSMENT);
         }
-        return ReviewItemDto.from(reviewItem, clock);
+        return ReviewItemDto.from(reviewItem, clock, attempt.getStatus() == AttemptStatus.SUBMITTED);
     }
 
     private static long dayOffset(SelfAssessmentMastery mastery) {

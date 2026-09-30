@@ -6,6 +6,7 @@ import ch.admin.zas.jweb.laforge.common.domain.Source;
 import ch.admin.zas.jweb.laforge.discovery.domain.Article;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -23,9 +24,11 @@ public record ArticleDto(
         List<ExerciseSummaryDto> relatedExercises,
         int revision) {
 
-    public static ArticleDto from(Article article) {
+    public static ArticleDto from(Article article, Set<UUID> completedExerciseIds) {
         var topicIds = article.getTopics().stream().map(topic -> topic.getId()).collect(Collectors.toList());
-        var related = article.getRelatedExerciseVersions().stream().map(ExerciseSummaryDto::from).collect(Collectors.toList());
+        var related = article.getRelatedExerciseVersions().stream()
+                .map(version -> ExerciseSummaryDto.from(version, completedExerciseIds.contains(version.getExercise().getId())))
+                .toList();
         return new ArticleDto(
                 article.getId(),
                 article.getTitle(),

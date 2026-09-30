@@ -11,6 +11,8 @@ import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 /** Accès aux brouillons d'exercices. */
 public interface DraftRepository extends JpaRepository<Draft, UUID>, JpaSpecificationExecutor<Draft> {
 
+    Optional<Draft> findByIdAndAuthor_Id(UUID id, UUID authorId);
+
     /** Brouillon non publié pour un exercice donné (au plus un à la fois, imposé par le contrat). */
     Optional<Draft> findByExerciseIdAndStateNot(UUID exerciseId, DraftState excludedState);
 

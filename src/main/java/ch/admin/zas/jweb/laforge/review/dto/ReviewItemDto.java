@@ -12,10 +12,10 @@ import java.util.UUID;
 public record ReviewItemDto(
         UUID id, ExerciseSummaryDto exercise, UUID sourceAttemptId, OffsetDateTime dueAt, ReviewReason reason, ReviewState state) {
 
-    public static ReviewItemDto from(ReviewItem item, Clock clock) {
+    public static ReviewItemDto from(ReviewItem item, Clock clock, boolean completed) {
         return new ReviewItemDto(
                 item.getId(),
-                ExerciseSummaryDto.from(item.getExerciseVersion()),
+                ExerciseSummaryDto.from(item.getExerciseVersion(), completed),
                 item.getSourceAttempt().getId(),
                 item.getDueAt(),
                 item.getReason(),

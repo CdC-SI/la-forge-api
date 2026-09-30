@@ -24,7 +24,7 @@ import java.util.Set;
 import org.hibernate.annotations.ColumnTransformer;
 
 /**
- * Fiche de veille technique, publiée directement par un {@code REVIEWER}/{@code ADMIN} (pas de
+ * Fiche de veille technique, publiée directement par un {@code AUTHOR}/{@code ADMIN} (pas de
  * cycle brouillon). {@code revision} porte le verrouillage optimiste exigé par le contrat
  * ({@code expectedRevision} sur {@code PUT /authoring/articles/{id}}).
  */

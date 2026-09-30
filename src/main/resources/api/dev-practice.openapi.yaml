@@ -5,17 +5,20 @@ info:
   description: |
     Contrat du prototype de laboratoire d’entraînement technique. Texte métier en français, identifiants API en anglais.
 
-    Périmètre : profil, catalogue, exercices versionnés, tentatives, indices, corrigés, révisions, veille, défis collectifs, édition et tuteur IA optionnel. Pas d’exécution distante de code, génération automatique de contenus, classement RH ou gestion multi-entreprises. Une installation correspond à une entreprise ou un groupe pilote. Les rôles sont gérés hors API.
+    Périmètre : profil, catalogue, exercices versionnés, tentatives, indices, corrigés, révisions, veille, défis collectifs, édition, administration des rôles et tuteur IA optionnel. Pas d’exécution distante de code, génération automatique de contenus, classement RH ou gestion multi-entreprises. Une installation correspond à une entreprise ou un groupe pilote.
 
     Authentification : compte créé localement via /auth/registrations (email + mot de passe), activé par confirmation
     du jeton de vérification reçu par courriel (/auth/verifications). Connexion via /auth/sessions : le serveur émet
     lui-même un bearer JWT de courte durée (signature RS256) accompagné d’un jeton de renouvellement opaque
     (/auth/sessions/refresh). Le serveur valide signature, issuer, audience et expiration ; utilisateur courant déduit
-    de sub, jamais du corps de requête. Rôles LEARNER, AUTHOR, REVIEWER, ADMIN cumulatifs ; tous les comptes peuvent
+    de sub, jamais du corps de requête. Rôles LEARNER, AUTHOR, ADMIN cumulatifs ; tous les comptes peuvent
     pratiquer dès activation. x-required-roles signifie au moins un rôle de la liste, plus les contraintes de propriété
-    décrites. ADMIN n’accorde pas l’accès aux tentatives privées des autres.
+    décrites. ADMIN n’accorde pas l’accès aux tentatives ni aux brouillons privés des autres. Les permissions
+    effectives sont celles du JWT courant ; les changements de rôles en base s’appliquent aux nouveaux jetons
+    émis à la connexion ou au renouvellement. Un ancien jeton d’accès conserve ses droits jusqu’à expiration,
+    même après renouvellement ; aucune révocation immédiate des droits.
 
-    Isolation : 404 pour une ressource hors périmètre, 403 pour un rôle insuffisant ou une condition de déblocage non remplie dans une ressource accessible. Les projections catalogue n’exposent jamais de corrigé. Les accès éditoriaux constituent une exception volontaire pour les auteurs/relecteurs ; le produit n’est pas un dispositif anti-triche ou de certification.
+    Isolation : 404 pour une ressource hors périmètre, 403 pour un rôle insuffisant ou une condition de déblocage non remplie dans une ressource accessible. Les projections catalogue n’exposent jamais de corrigé. Le contenu éditorial incluant le corrigé est privé à son auteur ; le produit n’est pas un dispositif anti-triche ou de certification.
 
     Versions : une publication est immuable et reste lisible. Tentatives et défis référencent explicitement exercice + version. Tous les timestamps sont RFC 3339 avec offset ; le serveur utilise UTC et son horloge pour les échéances. À now >= closesAt le défi est fermé, sans tâche planifiée nécessaire.
 
@@ -27,7 +30,13 @@ info:
 
     Sécurité de rendu : Markdown et code sont des contenus non fiables ; assainir le HTML au rendu, ne jamais exécuter le code fourni. Les URL de sources sont des liens, aucune récupération arbitraire serveur implicite. Les réponses privées utilisent Cache-Control: private, no-store. Les liens collectifs exigent toujours authentification et inscription. L’IA ne reçoit que les données autorisées et ses réponses n’écrasent jamais un corrigé validé.
 
-    Parcours minimal : GET /me/dashboard → GET /exercises/{id}/versions/{version} → POST /attempts → PUT /attempts/{id}/submission → GET /attempts/{id}/debrief → PUT /attempts/{id}/self-assessment. Parcours collectif : créer → rejoindre avec code → tenter → soumettre → comparer → discuter. Parcours éditorial : DRAFT → IN_REVIEW → APPROVED → PUBLISHED, retour DRAFT si changements demandés.
+    Parcours minimal : GET /me/dashboard → GET /exercises/{id}/versions/{version} → POST /attempts → PUT /attempts/{id}/submission → GET /attempts/{id}/debrief → PUT /attempts/{id}/self-assessment. Parcours collectif : créer → rejoindre avec code → tenter → soumettre → comparer → discuter. Parcours éditorial : DRAFT → PUBLISHED, avec validation complète à la publication.
+
+    Déjà fait : completed est personnel à l’utilisateur courant, vrai dès qu’une de ses tentatives sur l’exercice,
+    toutes versions confondues, est SUBMITTED, sans exigence de réussite ni d’auto-évaluation. IN_PROGRESS et
+    ABANDONED seuls ne comptent pas. Ce champ est renseigné dans toutes les projections ExerciseSummary et
+    Exercise (catalogue, tableau de bord, défis, révisions et publication). Refaire en individuel reste autorisé ;
+    les contraintes existantes de tentative en cours, défi, révision et idempotence restent applicables.
 servers:
 - url: /api/v1
   description: Même origine que le frontend ; préfixe de la v1.
@@ -49,7 +58,9 @@ tags:
 - name: Collective
   description: Défis partagés et débrief collectif
 - name: Authoring
-  description: Contenus et validation éditoriale
+  description: Brouillons privés et publication directe
+- name: Admin
+  description: Recherche des comptes et gestion de leurs rôles
 paths:
   /auth/registrations:
     post:
@@ -217,13 +228,114 @@ paths:
           $ref: '#/components/responses/Unauthenticated'
         '500':
           $ref: '#/components/responses/InternalError'
+  /admin/accounts:
+    get:
+      tags:
+      - Admin
+      operationId: listAdminAccounts
+      summary: Rechercher les comptes
+      description: ADMIN uniquement. Recherche par sous-chaîne sur displayName ou email, sans distinction de
+        casse ; espaces en début et fin ignorés. query absent ou blanc retourne tous les comptes, quel que
+        soit leur statut. Ordre displayName croissant puis id croissant, pagination par curseur opaque.
+        Les rôles retournés sont les attributions en base destinées aux prochains jetons, pas les permissions
+        d’un jeton déjà émis. Aucun mot de passe, jeton, préférence ni historique de pratique n’est exposé.
+      parameters:
+      - name: query
+        in: query
+        schema:
+          type: string
+        description: Texte recherché dans le nom d’affichage ou l’adresse de courriel.
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Comptes correspondant à la recherche.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminAccountPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-required-roles:
+      - ADMIN
+  /admin/accounts/{accountId}/roles:
+    put:
+      tags:
+      - Admin
+      operationId: replaceAccountRoles
+      summary: Remplacer les rôles d’un autre compte actif
+      description: |
+        ADMIN uniquement, acteur déduit du JWT ; accountId désigne seulement le compte cible.
+        Remplacement complet et atomique des attributions en base, avec LEARNER obligatoire.
+        Les changements sont sérialisés en base pour protéger le dernier ADMIN actif.
+        Auto-modification interdite (403), compte absent (404), compte non ACTIVE ou retrait du rôle
+        du dernier ADMIN actif (409 INVALID_STATE). JSON mal formé, propriété inconnue ou type invalide : 400.
+        Ensemble vide, rôle inconnu, doublon ou absence de LEARNER : 422 VALIDATION_FAILED avec violations.
+        PUT idempotent, dernière écriture acceptée gagnante ; ni If-Match ni Idempotency-Key requis.
+        Les nouveaux rôles prennent effet à la connexion ou au renouvellement de session.
+        Les jetons d’accès déjà émis conservent leurs permissions jusqu’à expiration, même après renouvellement.
+      parameters:
+      - name: accountId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReplaceAccountRolesInput'
+      responses:
+        '200':
+          description: Compte avec ses attributions en base après remplacement.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminAccount'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          description: Rôle ADMIN absent ou tentative de modifier ses propres rôles.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Compte cible non actif ou retrait du dernier ADMIN actif.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      x-required-roles:
+      - ADMIN
   /me:
     get:
       tags:
       - Profile
       operationId: getMe
       summary: Lire le profil courant
-      description: Lire le profil courant
+      description: Lire le profil courant. roles contient les permissions effectives du JWT courant, et non
+        les attributions éventuellement modifiées en base depuis son émission.
       responses:
         '200':
           description: Lire le profil courant.
@@ -1067,7 +1179,7 @@ paths:
       - Authoring
       operationId: publishArticle
       summary: Publier une fiche de veille
-      description: REVIEWER ou ADMIN. Publication immédiate après validation éditoriale hors ligne ; état initial
+      description: AUTHOR ou ADMIN. Publication immédiate après validation éditoriale hors ligne ; état initial
         revision=1. Le serveur vérifie thèmes et exercices liés. Corps Markdown assaini au rendu.
       responses:
         '201':
@@ -1101,7 +1213,7 @@ paths:
             schema:
               $ref: '#/components/schemas/ArticleInput'
       x-required-roles:
-      - REVIEWER
+      - AUTHOR
       - ADMIN
   /authoring/articles/{articleId}:
     put:
@@ -1109,7 +1221,7 @@ paths:
       - Authoring
       operationId: updateArticle
       summary: Corriger une fiche de veille
-      description: REVIEWER ou ADMIN. expectedRevision doit égaler revision actuelle, sinon 409. Incrémente revision,
+      description: AUTHOR ou ADMIN. expectedRevision doit égaler revision actuelle, sinon 409. Incrémente revision,
         conserve publishedAt et actualise updatedAt. Les fiches ne servent jamais de correction figée d’une tentative.
       responses:
         '200':
@@ -1148,7 +1260,7 @@ paths:
             schema:
               $ref: '#/components/schemas/ArticleUpdate'
       x-required-roles:
-      - REVIEWER
+      - AUTHOR
       - ADMIN
   /challenges:
     post:
@@ -1448,9 +1560,9 @@ paths:
       - Authoring
       operationId: listDrafts
       summary: Lister les brouillons accessibles
-      description: 'AUTHOR : ses brouillons ; REVIEWER : brouillons IN_REVIEW et ceux qu’il a déjà relus ; ADMIN
-        : tous. Rôles cumulatifs. Ordre updatedAt décroissant puis id. Contenu incluant le corrigé réservé à ce
-        périmètre éditorial.'
+      description: AUTHOR ou ADMIN, uniquement ses propres brouillons, y compris après publication.
+        Aucun accès aux brouillons des autres, même pour ADMIN. Ordre updatedAt décroissant puis id.
+        Le contenu incluant le corrigé reste privé à son auteur.
       responses:
         '200':
           description: Lister les brouillons accessibles.
@@ -1479,13 +1591,10 @@ paths:
           type: string
           enum:
           - DRAFT
-          - IN_REVIEW
-          - APPROVED
           - PUBLISHED
         description: ''
       x-required-roles:
       - AUTHOR
-      - REVIEWER
       - ADMIN
     post:
       tags:
@@ -1493,8 +1602,10 @@ paths:
       operationId: createDraft
       summary: Créer un brouillon ou une nouvelle version
       description: 'AUTHOR ou ADMIN. Nouvel exercice : exerciseId attribué côté serveur et baseVersion=0. Révision
-        existante : propriétaire de l’exercice ou ADMIN, baseVersion figée sur dernière publication. Un seul brouillon
-        actif par exercice, sinon 409. État DRAFT, revision=1.'
+        existante : uniquement propriétaire de l’exercice, sans exception ADMIN, sinon 404 ; baseVersion figée
+        sur dernière publication. Un seul brouillon actif par exercice, sinon 409. État DRAFT, revision=0.
+        Un contenu avec seulement un titre suffit ; les autres scalaires peuvent être absents ou null,
+        les collections omises ou null deviennent vides. La complétude est vérifiée à la publication.'
       responses:
         '201':
           description: Créer un brouillon ou une nouvelle version.
@@ -1576,16 +1687,16 @@ paths:
           format: uuid
       x-required-roles:
       - AUTHOR
-      - REVIEWER
       - ADMIN
     put:
       tags:
       - Authoring
       operationId: replaceDraft
       summary: Remplacer le contenu du brouillon
-      description: Auteur propriétaire ou ADMIN ; DRAFT uniquement, sinon 409. Remplacement atomique, incrémente
-        revision. Les anciennes reviews restent dans l’historique mais ne valent jamais approbation de la nouvelle
-        révision.
+      description: Auteur propriétaire ayant AUTHOR ou ADMIN, sans exception de propriété pour ADMIN ; sinon 404.
+        DRAFT uniquement, sinon 409. Remplacement complet et atomique du contenu, incrémente revision.
+        Aucun champ omis ne conserve son ancienne valeur ; les scalaires omis ou null sont non renseignés,
+        les collections omises ou null deviennent vides. Seul le titre est obligatoire à l’enregistrement.
       responses:
         '200':
           description: Remplacer le contenu du brouillon.
@@ -1636,130 +1747,29 @@ paths:
       x-required-roles:
       - AUTHOR
       - ADMIN
-  /authoring/drafts/{draftId}/submit:
-    post:
-      tags:
-      - Authoring
-      operationId: submitDraftForReview
-      summary: Soumettre le brouillon à relecture
-      description: Auteur propriétaire ou ADMIN. DRAFT → IN_REVIEW. Vérifie cohérence complète des choix, corrigé,
-        indices, références et thèmes. Incrémente revision. Aucune publication automatique.
-      responses:
-        '200':
-          description: Soumettre le brouillon à relecture.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Draft'
-          headers:
-            ETag:
-              description: Version forte du brouillon, par exemple "7". À recopier dans If-Match.
-              schema:
-                type: string
-              example: '"7"'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthenticated'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '412':
-          $ref: '#/components/responses/PreconditionFailed'
-        '422':
-          $ref: '#/components/responses/ValidationFailed'
-        '428':
-          $ref: '#/components/responses/PreconditionRequired'
-        '429':
-          $ref: '#/components/responses/TooManyRequests'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      parameters:
-      - name: draftId
-        in: path
-        required: true
-        schema:
-          type: string
-          format: uuid
-      - $ref: '#/components/parameters/IfMatch'
-      x-required-roles:
-      - AUTHOR
-      - ADMIN
-  /authoring/drafts/{draftId}/review:
-    post:
-      tags:
-      - Authoring
-      operationId: reviewDraft
-      summary: Approuver ou demander des changements
-      description: REVIEWER ou ADMIN, IN_REVIEW uniquement. APPROVE → APPROVED ; REQUEST_CHANGES → DRAFT. Incrémente
-        revision et enregistre la décision. Pour un pilote individuel, autoapprobation autorisée uniquement à ADMIN
-        et consignée dans reviews ; REVIEWER ne peut pas approuver son propre contenu (403).
-      responses:
-        '200':
-          description: Approuver ou demander des changements.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Draft'
-          headers:
-            ETag:
-              description: Version forte du brouillon, par exemple "7". À recopier dans If-Match.
-              schema:
-                type: string
-              example: '"7"'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthenticated'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '412':
-          $ref: '#/components/responses/PreconditionFailed'
-        '422':
-          $ref: '#/components/responses/ValidationFailed'
-        '428':
-          $ref: '#/components/responses/PreconditionRequired'
-        '429':
-          $ref: '#/components/responses/TooManyRequests'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      parameters:
-      - name: draftId
-        in: path
-        required: true
-        schema:
-          type: string
-          format: uuid
-      - $ref: '#/components/parameters/IfMatch'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ReviewInput'
-      x-required-roles:
-      - REVIEWER
-      - ADMIN
   /authoring/drafts/{draftId}/publish:
     post:
       tags:
       - Authoring
       operationId: publishDraft
-      summary: Publier la version approuvée
-      description: 'Auteur propriétaire ou ADMIN. APPROVED requis. Vérifie que baseVersion est toujours la dernière
-        version publiée, sinon 409. Publication atomique : nouvelle version immuable baseVersion+1, brouillon PUBLISHED
-        et revision incrémentée. Corrigé et indices stockés avec cette version ; seules les projections apprenant
-        sont retournées. Nouvelle modification : nouveau brouillon.'
+      summary: Publier directement le brouillon
+      description: |
+        Auteur propriétaire ayant AUTHOR ou ADMIN, sans exception de propriété pour ADMIN ; sinon 404.
+        DRAFT requis ; état incompatible ou baseVersion différente de la dernière version publiée : 409.
+        Vérifie avant toute création la complétude et la cohérence du contenu : titre, type, difficulté,
+        durée, énoncé, au moins un objectif pédagogique et un thème existant, format de réponse et corrigé complet
+        avec sources. Les choix ont des identifiants uniques et sont compatibles avec le format ;
+        les bonnes réponses référencent les choix proposés (une exactement pour SINGLE_CHOICE, au moins une
+        pour MULTIPLE_CHOICE). QUIZ exige un format de choix ; REVIEW exige des verdicts attendus.
+        Les indices sont contigus à partir de 1 et les propriétés de correction incompatibles sont interdites.
+        Un contenu incomplet ou incohérent produit 422 VALIDATION_FAILED avec violations précisant les chemins
+        des champs manquants ou invalides ; aucune version n’est créée et le brouillon reste inchangé.
+        Publication atomique : nouvelle version immuable baseVersion+1, brouillon PUBLISHED et revision incrémentée.
+        Corrigé et indices sont stockés avec cette version ; seule la projection apprenant est retournée.
+        Nouvelle modification : nouveau brouillon de son auteur ; les anciennes versions et tentatives sont conservées.
       responses:
         '200':
-          description: Publier la version approuvée.
+          description: Version publiée, avec completed calculé pour l’appelant sur toutes les versions de l’exercice.
           content:
             application/json:
               schema:
@@ -1776,6 +1786,23 @@ paths:
           $ref: '#/components/responses/Conflict'
         '412':
           $ref: '#/components/responses/PreconditionFailed'
+        '422':
+          description: Contenu incomplet ou incohérent. violations identifie les champs à compléter ou corriger.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+              example:
+                type: urn:dev-practice:problem:validation-failed
+                title: Contenu non publiable
+                status: 422
+                code: VALIDATION_FAILED
+                detail: Complétez le brouillon avant publication.
+                violations:
+                - field: content.type
+                  message: Le type est obligatoire pour publier.
+                - field: content.correction
+                  message: Le corrigé est obligatoire pour publier.
         '428':
           $ref: '#/components/responses/PreconditionRequired'
         '429':
@@ -1799,7 +1826,8 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: Jeton du fournisseur d’identité configuré. Acquisition hors périmètre.
+      description: JWT RS256 émis par /auth/sessions ou /auth/sessions/refresh.
+        Les rôles effectifs restent ceux du jeton validé jusqu’à son expiration.
   parameters:
     Limit:
       name: limit
@@ -2167,6 +2195,83 @@ components:
       - sessionMinutes
       - locale
       - timeZone
+    Role:
+      type: string
+      enum:
+      - LEARNER
+      - AUTHOR
+      - ADMIN
+    AdminAccount:
+      type: object
+      additionalProperties: false
+      description: Vue administrative limitée aux informations du compte et à ses attributions en base.
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+          maxLength: 320
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 200
+        status:
+          type: string
+          enum:
+          - PENDING_VERIFICATION
+          - ACTIVE
+          - LOCKED
+          - DISABLED
+        roles:
+          type: array
+          items:
+            $ref: '#/components/schemas/Role'
+          maxItems: 3
+          uniqueItems: true
+          description: Attributions stockées en base, utilisées pour les prochains jetons.
+            Un compte en attente d’activation peut ne pas avoir de rôle.
+      required:
+      - id
+      - email
+      - displayName
+      - status
+      - roles
+    ReplaceAccountRolesInput:
+      type: object
+      additionalProperties: false
+      properties:
+        roles:
+          type: array
+          items:
+            $ref: '#/components/schemas/Role'
+          minItems: 1
+          maxItems: 3
+          uniqueItems: true
+          description: Ensemble complet des rôles souhaités ; doit contenir LEARNER, sinon 422.
+      required:
+      - roles
+      example:
+        roles:
+        - LEARNER
+        - AUTHOR
+    AdminAccountPage:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminAccount'
+          maxItems: 100
+        nextCursor:
+          type: string
+          maxLength: 1000
+      required:
+      - items
+      description: Pagination par curseur opaque ; nextCursor absent à la dernière page. Aucun total garanti.
+        Réutiliser le curseur avec le même filtre query. Ordre displayName croissant puis id croissant.
     User:
       type: object
       additionalProperties: false
@@ -2180,14 +2285,11 @@ components:
           minLength: 1
         roles:
           type: array
+          description: Permissions effectives du JWT courant pour les réponses authentifiées, notamment /me.
+            Les attributions modifiées en base ne changent pas un jeton déjà émis.
           items:
-            type: string
-            enum:
-            - LEARNER
-            - AUTHOR
-            - REVIEWER
-            - ADMIN
-          maxItems: 4
+            $ref: '#/components/schemas/Role'
+          maxItems: 3
           uniqueItems: true
         preferences:
           $ref: '#/components/schemas/Preferences'
@@ -2252,6 +2354,8 @@ components:
     TechnologyRequirement:
       type: object
       additionalProperties: false
+      description: Seul le nom de technologie est obligatoire, y compris pour publier un exercice ou un article.
+        Les métadonnées absentes ou null restent non renseignées ; aucune version ni aucun statut implicite.
       properties:
         technology:
           type: string
@@ -2259,21 +2363,25 @@ components:
           minLength: 1
         minimumVersion:
           type: string
+          nullable: true
           maxLength: 40
           minLength: 1
+          pattern: '\S'
+          description: Si renseignée, version non blanche.
         featureStatus:
           type: string
+          nullable: true
           enum:
           - STABLE
           - PREVIEW
           - INCUBATOR
+          - null
         notes:
           type: string
+          nullable: true
           maxLength: 4000
       required:
       - technology
-      - minimumVersion
-      - featureStatus
     CodeFile:
       type: object
       additionalProperties: false
@@ -2342,7 +2450,13 @@ components:
     ExerciseSummary:
       type: object
       additionalProperties: false
+      description: Projection personnalisée pour l’utilisateur courant, quel que soit l’écran consommateur.
       properties:
+        completed:
+          type: boolean
+          description: Vrai si l’utilisateur courant a au moins une tentative SUBMITTED sur cet exercice,
+            toutes versions confondues, sans exigence de réussite ni d’auto-évaluation.
+            Une nouvelle tentative ne remet pas ce champ à false ; refaire en individuel reste autorisé.
         id:
           type: string
           format: uuid
@@ -2388,10 +2502,16 @@ components:
       - estimatedMinutes
       - technologies
       - publishedAt
+      - completed
     Exercise:
       type: object
       additionalProperties: false
       properties:
+        completed:
+          type: boolean
+          description: Vrai si l’utilisateur courant a au moins une tentative SUBMITTED sur cet exercice,
+            toutes versions confondues, sans exigence de réussite ni d’auto-évaluation.
+            Une nouvelle tentative ne remet pas ce champ à false ; refaire en individuel reste autorisé.
         id:
           type: string
           format: uuid
@@ -2466,8 +2586,9 @@ components:
       - files
       - responseSpec
       - hintCount
+      - completed
       description: Projection apprenant. Ne contient ni corrigé, ni bonne réponse, ni contenu des indices non débloqués.
-        Une version publiée est immuable.
+        Le contenu publié est immuable ; completed est un indicateur personnel calculé à la lecture.
     RubricCriterion:
       type: object
       additionalProperties: false
@@ -2570,12 +2691,22 @@ components:
           type: string
           maxLength: 200
           minLength: 1
+          pattern: '\S'
         type:
-          $ref: '#/components/schemas/ExerciseType'
+          anyOf:
+          - $ref: '#/components/schemas/ExerciseType'
+          - type: string
+            nullable: true
+            enum: [null]
         difficulty:
-          $ref: '#/components/schemas/Difficulty'
+          anyOf:
+          - $ref: '#/components/schemas/Difficulty'
+          - type: string
+            nullable: true
+            enum: [null]
         topicIds:
           type: array
+          nullable: true
           items:
             type: string
             format: uuid
@@ -2583,55 +2714,69 @@ components:
           uniqueItems: true
         estimatedMinutes:
           type: integer
+          nullable: true
           format: int32
           minimum: 1
           maximum: 60
         technologies:
           type: array
+          nullable: true
           items:
             $ref: '#/components/schemas/TechnologyRequirement'
           maxItems: 10
         promptMarkdown:
           type: string
+          nullable: true
           maxLength: 20000
           minLength: 1
+          pattern: '\S'
         learningObjectives:
           type: array
+          nullable: true
           items:
             type: string
             maxLength: 200
             minLength: 1
           maxItems: 10
-          minItems: 1
         files:
           type: array
+          nullable: true
           items:
             $ref: '#/components/schemas/CodeFile'
           maxItems: 10
         responseSpec:
-          $ref: '#/components/schemas/ResponseSpec'
+          anyOf:
+          - $ref: '#/components/schemas/ResponseSpec'
+          - type: object
+            nullable: true
+            enum: [null]
         hints:
           type: array
+          nullable: true
           items:
             $ref: '#/components/schemas/Hint'
           maxItems: 5
         correction:
-          $ref: '#/components/schemas/Correction'
+          anyOf:
+          - $ref: '#/components/schemas/Correction'
+          - type: object
+            nullable: true
+            enum: [null]
       required:
       - title
-      - type
-      - difficulty
-      - topicIds
-      - estimatedMinutes
-      - technologies
-      - promptMarkdown
-      - learningObjectives
-      - files
-      - responseSpec
-      - hints
-      - correction
-      description: Contenu éditorial complet, réservé à auteur habilité et relecteur. Indices contigus à partir
-        de 1. Les références, versions, choix et critères sont vérifiés avant publication.
+      description: |
+        Contenu progressif privé à son auteur : seul un titre non blanc est requis pour enregistrer.
+        Les autres scalaires et objets peuvent être absents ou null ; aucune valeur n’est inventée.
+        Les collections omises ou null sont normalisées en listes vides et retournées ainsi.
+        Les champs fournis conservent leurs contraintes de taille, format et valeurs.
+        Les objets et éléments de collection fournis doivent être structurellement valides :
+        responseSpec fourni exige kind, et chaque choix fourni exige un identifiant et un libellé valides.
+        Un PUT remplace tout ce contenu : les champs omis sont effacés, jamais fusionnés avec l’ancien contenu.
+        La complétude et la cohérence sont exigées seulement à la publication (422 avec violations) :
+        type, difficulté, durée, énoncé, objectifs non vides, format de réponse, corrigé et sources ;
+        au moins un thème existant, choix et bonnes réponses compatibles, indices contigus à partir de 1.
+      example:
+        title: Comprendre les records Java
     DraftInput:
       type: object
       additionalProperties: false
@@ -2644,40 +2789,17 @@ components:
       required:
       - content
       description: 'exerciseId absent : nouvel exercice. Présent : nouvelle version d’un exercice dont l’appelant
-        est auteur ou administrateur. Une seule révision non publiée par exercice. Le serveur mémorise la version
-        publiée de base.'
+        est l’auteur, sans exception pour ADMIN, sinon 404. Une seule révision non publiée par exercice.
+        Le serveur mémorise la version publiée de base. content peut ne contenir qu’un titre.'
     DraftUpdate:
       type: object
       additionalProperties: false
+      description: Remplacement complet du contenu, pas une fusion. Seul content.title est obligatoire.
       properties:
         content:
           $ref: '#/components/schemas/ExerciseContent'
       required:
       - content
-    EditorialReview:
-      type: object
-      additionalProperties: false
-      properties:
-        reviewerId:
-          type: string
-          format: uuid
-        decision:
-          type: string
-          enum:
-          - APPROVE
-          - REQUEST_CHANGES
-        comment:
-          type: string
-          maxLength: 20000
-          minLength: 1
-        reviewedAt:
-          type: string
-          format: date-time
-      required:
-      - reviewerId
-      - decision
-      - comment
-      - reviewedAt
     Draft:
       type: object
       additionalProperties: false
@@ -2695,24 +2817,17 @@ components:
           type: string
           enum:
           - DRAFT
-          - IN_REVIEW
-          - APPROVED
           - PUBLISHED
         revision:
           type: integer
           format: int32
-          minimum: 1
+          minimum: 0
         baseVersion:
           type: integer
           format: int32
           minimum: 0
         content:
           $ref: '#/components/schemas/ExerciseContent'
-        reviews:
-          type: array
-          items:
-            $ref: '#/components/schemas/EditorialReview'
-          maxItems: 100
         publishedVersion:
           type: integer
           format: int32
@@ -2728,24 +2843,7 @@ components:
       - revision
       - baseVersion
       - content
-      - reviews
       - updatedAt
-    ReviewInput:
-      type: object
-      additionalProperties: false
-      properties:
-        decision:
-          type: string
-          enum:
-          - APPROVE
-          - REQUEST_CHANGES
-        comment:
-          type: string
-          maxLength: 20000
-          minLength: 1
-      required:
-      - decision
-      - comment
     FreeTextAnswer:
       type: object
       additionalProperties: false
@@ -3356,7 +3454,7 @@ components:
       - bodyMarkdown
       - sources
       - relatedExercises
-      description: Fiche rédigée et validée par REVIEWER ou ADMIN. Les exercices liés doivent être publiés. Publication
+      description: Fiche rédigée et validée par AUTHOR ou ADMIN. Les exercices liés doivent être publiés. Publication
         immédiate ; pas d’ingestion automatique dans le MVP.
     ArticleUpdate:
       type: object

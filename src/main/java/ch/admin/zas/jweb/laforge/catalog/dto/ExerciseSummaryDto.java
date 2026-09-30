@@ -19,9 +19,10 @@ public record ExerciseSummaryDto(
         List<UUID> topicIds,
         int estimatedMinutes,
         List<TechnologyRequirement> technologies,
-        OffsetDateTime publishedAt) {
+        OffsetDateTime publishedAt,
+        boolean completed) {
 
-    public static ExerciseSummaryDto from(ExerciseVersion version) {
+    public static ExerciseSummaryDto from(ExerciseVersion version, boolean completed) {
         var topicIds = version.getTopics().stream().map(topic -> topic.getId()).collect(Collectors.toList());
         return new ExerciseSummaryDto(
                 version.getExercise().getId(),
@@ -32,6 +33,7 @@ public record ExerciseSummaryDto(
                 topicIds,
                 version.getEstimatedMinutes(),
                 version.getTechnologies(),
-                version.getPublishedAt());
+                version.getPublishedAt(),
+                completed);
     }
 }

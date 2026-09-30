@@ -12,6 +12,7 @@ import ch.admin.zas.jweb.laforge.discovery.service.DiscoveryService;
 import ch.admin.zas.jweb.laforge.practice.repository.AttemptRepository;
 import ch.admin.zas.jweb.laforge.practice.domain.AttemptStatus;
 import ch.admin.zas.jweb.laforge.practice.repository.TopicProgressProjection;
+import ch.admin.zas.jweb.laforge.practice.service.ExerciseCompletionService;
 import ch.admin.zas.jweb.laforge.profile.domain.Preferences;
 import ch.admin.zas.jweb.laforge.profile.dto.DashboardDto;
 import ch.admin.zas.jweb.laforge.profile.dto.PreferencesDto;
@@ -49,6 +50,7 @@ public class ProfileService {
     private final ReviewItemRepository reviewItemRepository;
     private final AccountRepository accountRepository;
     private final Clock clock;
+    private final ExerciseCompletionService exerciseCompletionService;
 
     public ProfileService(
             PreferencesRepository preferencesRepository,
@@ -60,6 +62,7 @@ public class ProfileService {
             AttemptRepository attemptRepository,
             ReviewItemRepository reviewItemRepository,
             AccountRepository accountRepository,
+            ExerciseCompletionService exerciseCompletionService,
             Clock clock) {
         this.preferencesRepository = preferencesRepository;
         this.topicRepository = topicRepository;
@@ -70,6 +73,7 @@ public class ProfileService {
         this.attemptRepository = attemptRepository;
         this.reviewItemRepository = reviewItemRepository;
         this.accountRepository = accountRepository;
+        this.exerciseCompletionService = exerciseCompletionService;
         this.clock = clock;
     }
 
@@ -107,18 +111,23 @@ public class ProfileService {
         var preferredTopicId = preferences.topicIds().isEmpty() ? null : preferences.topicIds().get(0);
 
         var recommendedExercises = catalogService
-                .listExercises(new PageQuery(3, null), null, preferences.difficulty(), preferredTopicId, null, null)
+                .listExercises(account, new PageQuery(3, null), null, preferences.difficulty(), preferredTopicId, null, null)
                 .items();
         var discoveries = discoveryService.listArticles(new PageQuery(3, null), preferredTopicId, null, null).items();
-        var openChallenges = challengeRepository.findOpenChallengesForAccount(account.id()).stream()
+        var challenges = challengeRepository.findOpenChallengesForAccount(account.id()).stream()
                 .limit(10)
+                .toList();
+        var completed = exerciseCompletionService.completedExerciseIds(account.id(),
+                challenges.stream().map(challenge -> challenge.getExerciseVersion().getExercise().getId()).toList());
+        var openChallenges = challenges.stream()
                 .map(challenge -> ChallengeDto.from(
                         challenge,
                         (int) challengeParticipantRepository.countByChallenge_Id(challenge.getId()),
                         attemptRepository
                                 .findByChallengeIdAndLearner_Id(challenge.getId(), account.id())
                                 .filter(attempt -> attempt.getStatus() == AttemptStatus.SUBMITTED)
-                                .isPresent()))
+                                .isPresent(),
+                        completed.contains(challenge.getExerciseVersion().getExercise().getId())))
                 .toList();
         var dueReviewCount = (int) reviewItemRepository.countByLearner_IdAndCompletedAtIsNullAndDueAtLessThanEqual(
                 account.id(), OffsetDateTime.now(clock));

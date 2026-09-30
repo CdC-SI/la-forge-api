@@ -29,9 +29,10 @@ public record ExerciseDto(
         List<String> learningObjectives,
         List<CodeFile> files,
         ResponseSpec responseSpec,
-        int hintCount) {
+        int hintCount,
+        boolean completed) {
 
-    public static ExerciseDto from(ExerciseVersion version) {
+    public static ExerciseDto from(ExerciseVersion version, boolean completed) {
         var topicIds = version.getTopics().stream().map(topic -> topic.getId()).collect(Collectors.toList());
         return new ExerciseDto(
                 version.getExercise().getId(),
@@ -47,6 +48,7 @@ public record ExerciseDto(
                 version.getLearningObjectives(),
                 version.getFiles(),
                 version.getResponseSpec(),
-                version.getHints().size());
+                version.getHints().size(),
+                completed);
     }
 }

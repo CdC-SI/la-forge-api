@@ -10,7 +10,7 @@ import jakarta.validation.constraints.Size;
 import java.util.List;
 import java.util.UUID;
 
-/** Contenu rédigé d'une fiche de veille, soumis par un {@code REVIEWER}/{@code ADMIN}. */
+/** Contenu rédigé d'une fiche de veille, soumis par un {@code AUTHOR}/{@code ADMIN}. */
 public record ArticleInput(
         @NotBlank @Size(max = 200) String title,
         @NotBlank @Size(max = 2000) String summary,

@@ -9,6 +9,7 @@ import ch.admin.zas.jweb.laforge.catalog.domain.Exercise;
 import ch.admin.zas.jweb.laforge.catalog.domain.ExerciseType;
 import ch.admin.zas.jweb.laforge.catalog.domain.ExerciseVersionFixtures;
 import ch.admin.zas.jweb.laforge.catalog.domain.Topic;
+import ch.admin.zas.jweb.laforge.catalog.domain.TechnologyRequirement;
 import ch.admin.zas.jweb.laforge.common.domain.Difficulty;
 import ch.admin.zas.jweb.laforge.common.error.StaleVersionException;
 import ch.admin.zas.jweb.laforge.common.persistence.RepositoryTestConfig;
@@ -97,15 +98,56 @@ class DraftRepositoryTest {
         entityManager.clear();
 
         var managed = draftRepository.findById(draft.getId()).orElseThrow();
-        managed.submitForReview(0);
+        managed.publish(0, 1);
         draftRepository.saveAndFlush(managed);
         entityManager.clear();
 
         var reloaded = draftRepository.findById(draft.getId()).orElseThrow();
-        assertThat(reloaded.getState()).isEqualTo(DraftState.IN_REVIEW);
+        assertThat(reloaded.getState()).isEqualTo(DraftState.PUBLISHED);
         assertThat(reloaded.getRevision()).isEqualTo(1);
 
-        org.junit.jupiter.api.Assertions.assertThrows(StaleVersionException.class, () -> reloaded.submitForReview(0));
+        org.junit.jupiter.api.Assertions.assertThrows(StaleVersionException.class, () -> reloaded.publish(0, 1));
+    }
+
+    @Test
+    void titleOnlyDraft_roundTripsAndKeepsOwnershipPrivate() {
+        var exercise = persistExercise();
+        var author = persistAccount("minimal@example.com");
+        var other = persistAccount("outsider@example.com");
+        var draft = draftRepository.saveAndFlush(new Draft(
+                exercise, author, 0, "Titre", null, null, null, null, null,
+                null, List.of(new TechnologyRequirement("Java", null, null, null)),
+                null, null, null, Set.of()));
+        entityManager.clear();
+
+        var reloaded = draftRepository.findByIdAndAuthor_Id(draft.getId(), author.getId()).orElseThrow();
+        assertThat(reloaded.getType()).isNull();
+        assertThat(reloaded.getDifficulty()).isNull();
+        assertThat(reloaded.getEstimatedMinutes()).isNull();
+        assertThat(reloaded.getPromptMarkdown()).isNull();
+        assertThat(reloaded.getResponseSpec()).isNull();
+        assertThat(reloaded.getCorrection()).isNull();
+        assertThat(reloaded.getLearningObjectives()).isEmpty();
+        assertThat(reloaded.getTechnologies()).containsExactly(new TechnologyRequirement("Java", null, null, null));
+        assertThat(draftRepository.findByIdAndAuthor_Id(draft.getId(), other.getId())).isEmpty();
+    }
+
+    @Test
+    void replacingContentFlushesTheNewRevisionAndCanClearOptionalFields() {
+        var draft = draftRepository.saveAndFlush(sampleDraft(
+                persistExercise(), persistAccount("replace@example.com"), Set.of()));
+        var previousRevision = draft.getRevision();
+        draft.replaceContent(previousRevision, "Nouveau titre", null, null, null,
+                null, null, null, null, null, null, null, Set.of());
+        draftRepository.flush();
+
+        assertThat(draft.getRevision()).isEqualTo(previousRevision + 1);
+        entityManager.clear();
+        var reloaded = draftRepository.findById(draft.getId()).orElseThrow();
+        assertThat(reloaded.getTitle()).isEqualTo("Nouveau titre");
+        assertThat(reloaded.getCorrection()).isNull();
+        assertThat(reloaded.getTechnologies()).isEmpty();
+        assertThat(reloaded.getLearningObjectives()).isEmpty();
     }
 
     @Test

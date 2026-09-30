@@ -10,6 +10,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
@@ -18,6 +19,8 @@ import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /**
  * Traduit toute exception levée par les contrôleurs en réponse {@code application/problem+json}
@@ -29,6 +32,22 @@ import org.springframework.web.context.request.WebRequest;
 public class ProblemDetailsHandler {
 
     private static final Logger log = LoggerFactory.getLogger(ProblemDetailsHandler.class);
+
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<Problem> handleInvalidParameter(MethodArgumentTypeMismatchException exception) {
+        return respond(ProblemCode.BAD_REQUEST, "Un paramètre de la requête est invalide.",
+                List.of(new Violation(exception.getName(), "La valeur ne respecte pas le format attendu.")));
+    }
+
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<Problem> handleMissingResource(NoResourceFoundException exception) {
+        return respond(ProblemCode.NOT_FOUND, "Ressource introuvable.", List.of());
+    }
+
+    @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
+    public ResponseEntity<Problem> handleConcurrentUpdate(ObjectOptimisticLockingFailureException exception) {
+        return respond(ProblemCode.STALE_VERSION, "La ressource a été modifiée par une autre requête.", List.of());
+    }
 
     @ExceptionHandler(ApiException.class)
     public ResponseEntity<Problem> handleApiException(ApiException exception, WebRequest request) {

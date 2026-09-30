@@ -8,6 +8,8 @@ import ch.admin.zas.jweb.laforge.discovery.dto.ArticleInput;
 import ch.admin.zas.jweb.laforge.discovery.dto.ArticleSummaryDto;
 import ch.admin.zas.jweb.laforge.discovery.dto.ArticleUpdateInput;
 import ch.admin.zas.jweb.laforge.discovery.service.DiscoveryService;
+import ch.admin.zas.jweb.laforge.security.dto.CurrentAccountDto;
+import ch.admin.zas.jweb.laforge.security.web.CurrentAccount;
 import jakarta.validation.Valid;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
@@ -42,21 +44,22 @@ public class DiscoveryController {
     }
 
     @GetMapping("/articles/{articleId}")
-    public ArticleDto getArticle(@PathVariable UUID articleId) {
-        return discoveryService.getArticle(articleId);
+    public ArticleDto getArticle(@CurrentAccount CurrentAccountDto account, @PathVariable UUID articleId) {
+        return discoveryService.getArticle(account, articleId);
     }
 
     @PostMapping("/authoring/articles")
     @ResponseStatus(HttpStatus.CREATED)
-    @PreAuthorize("hasAnyRole('REVIEWER', 'ADMIN')")
+    @PreAuthorize("hasAnyRole('AUTHOR', 'ADMIN')")
     @Idempotent
-    public ArticleDto publishArticle(@Valid @RequestBody ArticleInput input) {
-        return discoveryService.publishArticle(input);
+    public ArticleDto publishArticle(@CurrentAccount CurrentAccountDto account, @Valid @RequestBody ArticleInput input) {
+        return discoveryService.publishArticle(account, input);
     }
 
     @PutMapping("/authoring/articles/{articleId}")
-    @PreAuthorize("hasAnyRole('REVIEWER', 'ADMIN')")
-    public ArticleDto updateArticle(@PathVariable UUID articleId, @Valid @RequestBody ArticleUpdateInput input) {
-        return discoveryService.updateArticle(articleId, input.expectedRevision(), input.content());
+    @PreAuthorize("hasAnyRole('AUTHOR', 'ADMIN')")
+    public ArticleDto updateArticle(@CurrentAccount CurrentAccountDto account, @PathVariable UUID articleId,
+            @Valid @RequestBody ArticleUpdateInput input) {
+        return discoveryService.updateArticle(account, articleId, input.expectedRevision(), input.content());
     }
 }

@@ -3,8 +3,10 @@ package ch.admin.zas.jweb.laforge.practice.repository;
 import ch.admin.zas.jweb.laforge.practice.domain.Attempt;
 import ch.admin.zas.jweb.laforge.practice.domain.AttemptStatus;
 import java.time.OffsetDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
@@ -26,6 +28,15 @@ public interface AttemptRepository extends JpaRepository<Attempt, UUID>, JpaSpec
     Optional<Attempt> findByChallengeIdAndLearner_Id(UUID challengeId, UUID learnerId);
 
     long countByLearner_IdAndStatus(UUID learnerId, AttemptStatus status);
+
+    @Query("""
+            SELECT DISTINCT a.exerciseVersion.exercise.id FROM Attempt a
+            WHERE a.learner.id = :learnerId
+            AND a.exerciseVersion.exercise.id IN :exerciseIds
+            AND a.status = ch.admin.zas.jweb.laforge.practice.domain.AttemptStatus.SUBMITTED
+            """)
+    Set<UUID> findCompletedExerciseIds(
+            @Param("learnerId") UUID learnerId, @Param("exerciseIds") Collection<UUID> exerciseIds);
 
     /**
      * Vrai si l'apprenant a déjà révélé un indice sur cette version d'exercice en dehors du défi

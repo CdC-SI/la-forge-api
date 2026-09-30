@@ -15,15 +15,12 @@ import ch.admin.zas.jweb.laforge.catalog.domain.TechnologyRequirement;
 import ch.admin.zas.jweb.laforge.catalog.domain.TechnologyRequirementsConverter;
 import ch.admin.zas.jweb.laforge.catalog.domain.Topic;
 import ch.admin.zas.jweb.laforge.common.domain.Difficulty;
-import ch.admin.zas.jweb.laforge.common.error.ForbiddenException;
 import ch.admin.zas.jweb.laforge.common.error.InvalidStateException;
 import ch.admin.zas.jweb.laforge.common.error.StaleVersionException;
 import ch.admin.zas.jweb.laforge.common.persistence.BaseEntity;
 import ch.admin.zas.jweb.laforge.security.domain.Account;
-import jakarta.persistence.CollectionTable;
 import jakarta.persistence.Column;
 import jakarta.persistence.Convert;
-import jakarta.persistence.ElementCollection;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
@@ -40,8 +37,7 @@ import java.util.Set;
 import org.hibernate.annotations.ColumnTransformer;
 
 /**
- * Brouillon d'exercice porté par la machine à états éditoriale {@code DRAFT → IN_REVIEW →
- * APPROVED → PUBLISHED} (retour {@code DRAFT} si changements demandés). Le contenu réutilise les
+ * Brouillon privé publié directement par son auteur ({@code DRAFT → PUBLISHED}). Le contenu réutilise les
  * mêmes types de valeur immuables que {@link ch.admin.zas.jweb.laforge.catalog.domain.ExerciseVersion}
  * : à la publication, ce contenu est copié tel quel dans une nouvelle version figée.
  */
@@ -75,17 +71,17 @@ public class Draft extends BaseEntity {
     private String title;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "type", nullable = false, length = 30)
+    @Column(name = "type", length = 30)
     private ExerciseType type;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "difficulty", nullable = false, length = 20)
+    @Column(name = "difficulty", length = 20)
     private Difficulty difficulty;
 
-    @Column(name = "estimated_minutes", nullable = false)
-    private int estimatedMinutes;
+    @Column(name = "estimated_minutes")
+    private Integer estimatedMinutes;
 
-    @Column(name = "prompt_markdown", nullable = false, length = 20000)
+    @Column(name = "prompt_markdown", length = 20000)
     private String promptMarkdown;
 
     @Convert(converter = LearningObjectivesConverter.class)
@@ -105,7 +101,7 @@ public class Draft extends BaseEntity {
 
     @Convert(converter = ResponseSpecConverter.class)
     @ColumnTransformer(write = "cast(? as jsonb)")
-    @Column(name = "response_spec", nullable = false, columnDefinition = "jsonb")
+    @Column(name = "response_spec", columnDefinition = "jsonb")
     private ResponseSpec responseSpec;
 
     @Convert(converter = HintsConverter.class)
@@ -115,7 +111,7 @@ public class Draft extends BaseEntity {
 
     @Convert(converter = CorrectionConverter.class)
     @ColumnTransformer(write = "cast(? as jsonb)")
-    @Column(name = "correction", nullable = false, columnDefinition = "jsonb")
+    @Column(name = "correction", columnDefinition = "jsonb")
     private Correction correction;
 
     @ManyToMany(fetch = FetchType.LAZY)
@@ -136,7 +132,7 @@ public class Draft extends BaseEntity {
             String title,
             ExerciseType type,
             Difficulty difficulty,
-            int estimatedMinutes,
+            Integer estimatedMinutes,
             String promptMarkdown,
             List<String> learningObjectives,
             List<CodeFile> files,
@@ -164,7 +160,7 @@ public class Draft extends BaseEntity {
             String newTitle,
             ExerciseType newType,
             Difficulty newDifficulty,
-            int newEstimatedMinutes,
+            Integer newEstimatedMinutes,
             String newPromptMarkdown,
             List<String> newLearningObjectives,
             List<CodeFile> newFiles,
@@ -173,16 +169,13 @@ public class Draft extends BaseEntity {
             List<Hint> newHints,
             Correction newCorrection,
             Set<Topic> newTopics) {
-        requireCurrentRevision(expectedRevision);
-        if (state != null && state != DraftState.DRAFT) {
-            throw new InvalidStateException("Seul un brouillon en état DRAFT peut être remplacé.");
-        }
+        requireEditable(expectedRevision);
         this.title = newTitle;
         this.type = newType;
         this.difficulty = newDifficulty;
         this.estimatedMinutes = newEstimatedMinutes;
         this.promptMarkdown = newPromptMarkdown;
-        this.learningObjectives = List.copyOf(newLearningObjectives);
+        this.learningObjectives = newLearningObjectives == null ? List.of() : List.copyOf(newLearningObjectives);
         this.files = newFiles == null ? List.of() : List.copyOf(newFiles);
         this.technologies = newTechnologies == null ? List.of() : List.copyOf(newTechnologies);
         this.responseSpec = newResponseSpec;
@@ -192,50 +185,20 @@ public class Draft extends BaseEntity {
     }
 
     /**
-     * @throws StaleVersionException si {@code expectedRevision} ne correspond plus à la révision actuelle
-     * @throws InvalidStateException si le brouillon n'est pas en état {@code DRAFT}
-     */
-    public void submitForReview(int expectedRevision) {
-        requireCurrentRevision(expectedRevision);
-        requireState(DraftState.DRAFT, "Seul un brouillon en état DRAFT peut être soumis à relecture.");
-        state = DraftState.IN_REVIEW;
-    }
-
-    /**
-     * @throws StaleVersionException si {@code expectedRevision} ne correspond plus à la révision actuelle
-     * @throws InvalidStateException si le brouillon n'est pas en état {@code IN_REVIEW}
-     * @throws ForbiddenException    si le relecteur est l'auteur du contenu (auto-approbation interdite hors ADMIN)
-     */
-    public void approve(int expectedRevision, Account reviewer, boolean reviewerIsAdmin) {
-        requireCurrentRevision(expectedRevision);
-        requireState(DraftState.IN_REVIEW, "Seul un brouillon en relecture peut être approuvé.");
-        if (!reviewerIsAdmin && reviewer.getId().equals(author.getId())) {
-            throw new ForbiddenException("Un relecteur ne peut pas approuver son propre contenu.");
-        }
-        state = DraftState.APPROVED;
-    }
-
-    /**
-     * @throws StaleVersionException si {@code expectedRevision} ne correspond plus à la révision actuelle
-     * @throws InvalidStateException si le brouillon n'est pas en état {@code IN_REVIEW}
-     */
-    public void requestChanges(int expectedRevision) {
-        requireCurrentRevision(expectedRevision);
-        requireState(DraftState.IN_REVIEW, "Seul un brouillon en relecture peut recevoir une demande de changements.");
-        state = DraftState.DRAFT;
-    }
-
-    /**
      * Marque le brouillon comme publié sous le numéro de version indiqué.
      *
      * @throws StaleVersionException si {@code expectedRevision} ne correspond plus à la révision actuelle
-     * @throws InvalidStateException si le brouillon n'est pas {@code APPROVED}
+     * @throws InvalidStateException si le brouillon n'est pas {@code DRAFT}
      */
     public void publish(int expectedRevision, int newPublishedVersion) {
-        requireCurrentRevision(expectedRevision);
-        requireState(DraftState.APPROVED, "Seul un brouillon approuvé peut être publié.");
+        requireEditable(expectedRevision);
         state = DraftState.PUBLISHED;
         publishedVersion = newPublishedVersion;
+    }
+
+    public void requireEditable(int expectedRevision) {
+        requireCurrentRevision(expectedRevision);
+        requireState(DraftState.DRAFT, "Seul un brouillon en état DRAFT peut être modifié ou publié.");
     }
 
     private void requireCurrentRevision(int expectedRevision) {
@@ -286,7 +249,7 @@ public class Draft extends BaseEntity {
         return difficulty;
     }
 
-    public int getEstimatedMinutes() {
+    public Integer getEstimatedMinutes() {
         return estimatedMinutes;
     }
 

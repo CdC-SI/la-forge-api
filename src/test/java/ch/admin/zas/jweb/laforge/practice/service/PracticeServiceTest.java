@@ -270,6 +270,32 @@ class PracticeServiceTest {
     // --- setSelfAssessment -------------------------------------------------
 
     @Test
+    void createAttempt_apresSoumissionIndividuelle_autoriseDeRefaire() {
+        var learner = newAccount();
+        var version = newSingleChoiceVersion("A", List.of());
+        var submitted = newAttempt(learner, version, null, null, OffsetDateTime.now(clock).minusHours(1));
+        when(attemptRepository.findByIdAndLearner_Id(submitted.getId(), learner.getId())).thenReturn(Optional.of(submitted));
+        service.submitAttempt(current(learner), submitted.getId(), new SingleChoiceAnswer("A", "raisonnement", 5));
+        when(exerciseVersionRepository.findByExercise_IdAndVersionNumber(version.getExercise().getId(), 1))
+                .thenReturn(Optional.of(version));
+        when(accountRepository.getReferenceById(learner.getId())).thenReturn(learner);
+        when(attemptRepository.save(any(Attempt.class))).thenAnswer(invocation -> {
+            Attempt attempt = invocation.getArgument(0);
+            setId(attempt, UUID.randomUUID());
+            return attempt;
+        });
+
+        var replay = service.createAttempt(current(learner),
+                new CreateAttemptInput(version.getExercise().getId(), 1, null, null));
+
+        assertThat(submitted.getStatus()).isEqualTo(AttemptStatus.SUBMITTED);
+        assertThat(replay.status()).isEqualTo(AttemptStatus.IN_PROGRESS);
+        assertThat(replay.id()).isNotEqualTo(submitted.getId());
+        verify(attemptRepository, never()).existsByLearner_IdAndExerciseVersion_IdAndStatus(
+                learner.getId(), version.getId(), AttemptStatus.SUBMITTED);
+    }
+
+    @Test
     void setSelfAssessment_again_planifieARevisionUnJourPlusTard() {
         assertDayOffset(SelfAssessmentMastery.AGAIN, 1);
     }
@@ -302,6 +328,7 @@ class PracticeServiceTest {
 
         assertThat(dto.dueAt()).isEqualTo(OffsetDateTime.now(clock).plusDays(expectedDays));
         assertThat(dto.reason()).isEqualTo(ReviewReason.SELF_ASSESSMENT);
+        assertThat(dto.exercise().completed()).isTrue();
     }
 
     @Test

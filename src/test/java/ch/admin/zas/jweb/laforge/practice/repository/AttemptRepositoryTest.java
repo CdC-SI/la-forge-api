@@ -154,6 +154,44 @@ class AttemptRepositoryTest {
     }
 
     @Test
+    void findCompletedExerciseIds_toutesVersionsEtResultatsSansFuiteEntreApprenants() {
+        var learner = persistAccount("completion@example.com");
+        var other = persistAccount("completion-other@example.com");
+        var old = persistExerciseVersion(Set.of());
+        var latest = entityManager.persistAndFlush(
+                ExerciseVersionFixtures.sampleExerciseVersion(old.getExercise(), 2, Set.of()));
+        var inProgressOnly = persistExerciseVersion(Set.of());
+        var abandonedOnly = persistExerciseVersion(Set.of());
+        var otherOnly = persistExerciseVersion(Set.of());
+        var excludedFromPage = persistExerciseVersion(Set.of());
+        var now = OffsetDateTime.parse("2026-01-01T00:00:00Z");
+        var incorrect = new Attempt(learner, old, null, null, now);
+        incorrect.submit(new SingleChoiceAnswer("b", "raison", 3), ObjectiveResult.INCORRECT, now.plusMinutes(1));
+        var repeated = new Attempt(learner, old, null, null, now.plusDays(1));
+        repeated.submit(new SingleChoiceAnswer("b", "raison", 3), ObjectiveResult.INCORRECT, now.plusDays(1).plusMinutes(1));
+        var replay = new Attempt(learner, latest, null, null, now.plusDays(2));
+        var unfinished = new Attempt(learner, inProgressOnly, null, null, now);
+        var abandoned = new Attempt(learner, abandonedOnly, null, null, now);
+        abandoned.abandon();
+        var otherSubmitted = new Attempt(other, otherOnly, null, null, now);
+        otherSubmitted.submit(new SingleChoiceAnswer("a", "raison", 3), ObjectiveResult.CORRECT, now.plusMinutes(1));
+        var outsidePage = new Attempt(learner, excludedFromPage, null, null, now);
+        outsidePage.submit(new SingleChoiceAnswer("a", "raison", 3), ObjectiveResult.CORRECT, now.plusMinutes(1));
+        attemptRepository.saveAllAndFlush(
+                List.of(incorrect, repeated, replay, unfinished, abandoned, otherSubmitted, outsidePage));
+        entityManager.clear();
+        var ids = List.of(old.getExercise().getId(), inProgressOnly.getExercise().getId(),
+                abandonedOnly.getExercise().getId(), otherOnly.getExercise().getId());
+
+        assertThat(attemptRepository.findCompletedExerciseIds(learner.getId(), ids))
+                .containsExactly(old.getExercise().getId());
+        assertThat(attemptRepository.findCompletedExerciseIds(other.getId(), ids))
+                .containsExactly(otherOnly.getExercise().getId());
+        assertThat(attemptRepository.findById(replay.getId()).orElseThrow().getStatus())
+                .isEqualTo(AttemptStatus.IN_PROGRESS);
+    }
+
+    @Test
     void existsRevealedHintOutsideChallenge_detectsHintOutsideCurrentChallenge() {
         var learner = persistAccount("hint@example.com");
         var version = persistExerciseVersion(Set.of());

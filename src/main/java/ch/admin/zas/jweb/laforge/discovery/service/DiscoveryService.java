@@ -14,6 +14,8 @@ import ch.admin.zas.jweb.laforge.discovery.dto.ArticleDto;
 import ch.admin.zas.jweb.laforge.discovery.dto.ArticleInput;
 import ch.admin.zas.jweb.laforge.discovery.dto.ArticleSummaryDto;
 import ch.admin.zas.jweb.laforge.discovery.repository.ArticleRepository;
+import ch.admin.zas.jweb.laforge.practice.service.ExerciseCompletionService;
+import ch.admin.zas.jweb.laforge.security.dto.CurrentAccountDto;
 import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.util.HashMap;
@@ -34,16 +36,19 @@ public class DiscoveryService {
     private final ArticleRepository articleRepository;
     private final TopicRepository topicRepository;
     private final ExerciseVersionRepository exerciseVersionRepository;
+    private final ExerciseCompletionService completionService;
     private final Clock clock;
 
     public DiscoveryService(
             ArticleRepository articleRepository,
             TopicRepository topicRepository,
             ExerciseVersionRepository exerciseVersionRepository,
+            ExerciseCompletionService completionService,
             Clock clock) {
         this.articleRepository = articleRepository;
         this.topicRepository = topicRepository;
         this.exerciseVersionRepository = exerciseVersionRepository;
+        this.completionService = completionService;
         this.clock = clock;
     }
 
@@ -100,17 +105,17 @@ public class DiscoveryService {
     }
 
     /** @throws NotFoundException si la fiche n'existe pas */
-    public ArticleDto getArticle(UUID articleId) {
-        return ArticleDto.from(findArticleOrThrow(articleId));
+    public ArticleDto getArticle(CurrentAccountDto account, UUID articleId) {
+        return toDto(findArticleOrThrow(articleId), account);
     }
 
     /**
-     * Publication immédiate, réservée à {@code REVIEWER}/{@code ADMIN}.
+     * Publication immédiate, réservée à {@code AUTHOR}/{@code ADMIN}.
      *
      * @throws NotFoundException si un thème ou un exercice référencé n'existe pas ou n'est pas publié
      */
     @Transactional
-    public ArticleDto publishArticle(ArticleInput input) {
+    public ArticleDto publishArticle(CurrentAccountDto account, ArticleInput input) {
         var topics = resolveTopics(input.topicIds());
         var relatedVersions = resolveRelatedVersions(input.relatedExercises());
         var article = new Article(
@@ -122,7 +127,7 @@ public class DiscoveryService {
                 topics,
                 relatedVersions,
                 OffsetDateTime.now(clock));
-        return ArticleDto.from(articleRepository.save(article));
+        return toDto(articleRepository.save(article), account);
     }
 
     /**
@@ -130,7 +135,7 @@ public class DiscoveryService {
      * @throws ch.admin.zas.jweb.laforge.common.error.StaleVersionException si {@code expectedRevision} est obsolète
      */
     @Transactional
-    public ArticleDto updateArticle(UUID articleId, int expectedRevision, ArticleInput content) {
+    public ArticleDto updateArticle(CurrentAccountDto account, UUID articleId, int expectedRevision, ArticleInput content) {
         var article = findArticleOrThrow(articleId);
         var topics = resolveTopics(content.topicIds());
         var relatedVersions = resolveRelatedVersions(content.relatedExercises());
@@ -143,7 +148,13 @@ public class DiscoveryService {
                 content.sources(),
                 topics,
                 relatedVersions);
-        return ArticleDto.from(article);
+        return toDto(article, account);
+    }
+
+    private ArticleDto toDto(Article article, CurrentAccountDto account) {
+        var exerciseIds = article.getRelatedExerciseVersions().stream()
+                .map(version -> version.getExercise().getId()).toList();
+        return ArticleDto.from(article, completionService.completedExerciseIds(account.id(), exerciseIds));
     }
 
     private Article findArticleOrThrow(UUID articleId) {

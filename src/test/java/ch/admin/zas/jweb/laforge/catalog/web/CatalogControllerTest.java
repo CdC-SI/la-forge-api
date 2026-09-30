@@ -3,6 +3,7 @@ package ch.admin.zas.jweb.laforge.catalog.web;
 import static org.hamcrest.Matchers.hasSize;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
@@ -28,9 +29,12 @@ import ch.admin.zas.jweb.laforge.common.page.PageQuery;
 import ch.admin.zas.jweb.laforge.common.web.MaxRequestBodySizeFilter;
 import ch.admin.zas.jweb.laforge.common.web.SecurityHeadersFilter;
 import ch.admin.zas.jweb.laforge.security.config.SecurityConfig;
+import ch.admin.zas.jweb.laforge.security.domain.Account;
+import ch.admin.zas.jweb.laforge.security.dto.CurrentAccountDto;
 import ch.admin.zas.jweb.laforge.security.repository.AccountRepository;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -43,13 +47,13 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.util.ReflectionTestUtils;
 
 /**
  * Tests de contrat pour {@link CatalogController}. Toutes les routes exigent un porteur JWT valide
  * (aucun rôle particulier) : {@link SecurityConfig} est importée pour activer la chaîne de
- * sécurité, et {@link JwtDecoder}/{@link AccountRepository} sont mockés car {@code CatalogService}
- * n'utilise pas {@code @CurrentAccount} mais les beans transverses (résolveur d'argument, filtre de
- * sécurité) sont tout de même instanciés dans ce slice. Les filtres de durcissement transverse
+ * sécurité, et {@link JwtDecoder}/{@link AccountRepository} sont mockés pour résoudre le compte
+ * courant à partir du JWT. Les filtres de durcissement transverse
  * ({@link MaxRequestBodySizeFilter}, {@link SecurityHeadersFilter}) sont exclus du scan : ils
  * dépendent de {@code LaForgeProperties} (non chargée dans un slice {@code @WebMvcTest}) et sont
  * déjà couverts par leurs propres tests dédiés, pas par les tests de contrôleur.
@@ -58,6 +62,8 @@ import org.springframework.test.web.servlet.MockMvc;
         type = FilterType.ASSIGNABLE_TYPE, classes = {MaxRequestBodySizeFilter.class, SecurityHeadersFilter.class}))
 @Import(SecurityConfig.class)
 class CatalogControllerTest {
+
+    private static final UUID ACCOUNT_ID = UUID.randomUUID();
 
     @Autowired
     private MockMvc mockMvc;
@@ -70,6 +76,13 @@ class CatalogControllerTest {
 
     @MockitoBean
     private AccountRepository accountRepository;
+
+    private org.springframework.test.web.servlet.request.RequestPostProcessor authenticated() {
+        var account = new Account("catalog@example.com", "hash", "Apprenant");
+        ReflectionTestUtils.setField(account, "id", ACCOUNT_ID);
+        when(accountRepository.findById(ACCOUNT_ID)).thenReturn(Optional.of(account));
+        return jwt().jwt(builder -> builder.subject(ACCOUNT_ID.toString()));
+    }
 
     @Test
     void listTopics_returnsPageShape() throws Exception {
@@ -166,24 +179,27 @@ class CatalogControllerTest {
     void listExercises_returnsPageShape() throws Exception {
         var summary = new ExerciseSummaryDto(
                 UUID.randomUUID(), 1, "Titre", ExerciseType.QUIZ, Difficulty.BEGINNER, List.of(), 10, List.of(),
-                OffsetDateTime.now());
-        when(catalogService.listExercises(any(PageQuery.class), any(), any(), any(), any(), any()))
+                OffsetDateTime.now(), true);
+        when(catalogService.listExercises(any(CurrentAccountDto.class), any(PageQuery.class), any(), any(), any(), any(), any()))
                 .thenReturn(Page.last(List.of(summary)));
 
-        mockMvc.perform(get("/exercises").with(jwt()))
+        mockMvc.perform(get("/exercises").with(authenticated()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.items", hasSize(1)))
                 .andExpect(jsonPath("$.items[0].title").value("Titre"))
+                .andExpect(jsonPath("$.items[0].completed").value(true))
                 .andExpect(jsonPath("$.nextCursor").doesNotExist());
+        verify(catalogService).listExercises(argThat(account -> account.id().equals(ACCOUNT_ID)),
+                any(PageQuery.class), any(), any(), any(), any(), any());
     }
 
     @Test
     void getLatestExercise_notFound_returnsProblem() throws Exception {
         var exerciseId = UUID.randomUUID();
-        when(catalogService.getLatestExercise(exerciseId))
+        when(catalogService.getLatestExercise(any(CurrentAccountDto.class), eq(exerciseId)))
                 .thenThrow(new NotFoundException("Aucune version publiée pour cet exercice."));
 
-        mockMvc.perform(get("/exercises/{id}", exerciseId).with(jwt()))
+        mockMvc.perform(get("/exercises/{id}", exerciseId).with(authenticated()))
                 .andExpect(status().isNotFound())
                 .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
                 .andExpect(jsonPath("$.code").value("NOT_FOUND"))
@@ -194,16 +210,40 @@ class CatalogControllerTest {
     void getExerciseVersion_success() throws Exception {
         var exerciseId = UUID.randomUUID();
         var dto = mockExerciseDto();
-        when(catalogService.getExerciseVersion(exerciseId, 2)).thenReturn(dto);
+        when(catalogService.getExerciseVersion(any(CurrentAccountDto.class), eq(exerciseId), eq(2))).thenReturn(dto);
 
-        mockMvc.perform(get("/exercises/{id}/versions/{version}", exerciseId, 2).with(jwt()))
-                .andExpect(status().isOk());
+        mockMvc.perform(get("/exercises/{id}/versions/{version}", exerciseId, 2).with(authenticated()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.completed").value(false))
+                .andExpect(jsonPath("$.correction").doesNotExist());
+        verify(catalogService).getExerciseVersion(
+                argThat(account -> account.id().equals(ACCOUNT_ID)), eq(exerciseId), eq(2));
+    }
+
+    @Test
+    void getLatestExercise_transmetLeCompteEtRetourneCompletedObligatoire() throws Exception {
+        var dto = mockExerciseDto();
+        when(catalogService.getLatestExercise(any(CurrentAccountDto.class), eq(dto.id()))).thenReturn(dto);
+
+        mockMvc.perform(get("/exercises/{id}", dto.id()).with(authenticated()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.completed").value(false))
+                .andExpect(jsonPath("$.correction").doesNotExist());
+
+        verify(catalogService).getLatestExercise(argThat(account -> account.id().equals(ACCOUNT_ID)), eq(dto.id()));
+    }
+
+    @Test
+    void exercises_sansJwt_exigentUneAuthentification() throws Exception {
+        mockMvc.perform(get("/exercises")).andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/exercises/{id}", UUID.randomUUID())).andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/exercises/{id}/versions/1", UUID.randomUUID())).andExpect(status().isUnauthorized());
     }
 
     private ExerciseDto mockExerciseDto() {
         return new ExerciseDto(
                 UUID.randomUUID(), 2, "Titre", ExerciseType.QUIZ, Difficulty.BEGINNER, List.of(), 10, List.of(),
                 OffsetDateTime.now(), "Prompt", List.of(), List.of(),
-                new ResponseSpec(ResponseKind.FREE_TEXT, List.of()), 0);
+                new ResponseSpec(ResponseKind.FREE_TEXT, List.of()), 0, false);
     }
 }

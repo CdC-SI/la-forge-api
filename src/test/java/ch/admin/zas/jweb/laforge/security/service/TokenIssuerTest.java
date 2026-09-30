@@ -76,4 +76,22 @@ class TokenIssuerTest {
     void accessTokenTtl_retourneLaDureeConfiguree() {
         assertThat(tokenIssuer.accessTokenTtl()).isEqualTo(Duration.ofMinutes(15));
     }
+
+    @Test
+    void issueAccessToken_readsCurrentDatabaseRolesForEachIssuance() {
+        var account = new Account("learner@example.com", "hash", "Ada");
+        ReflectionTestUtils.setField(account, "id", UUID.randomUUID());
+        account.activate();
+        var encoded = mock(Jwt.class);
+        when(encoded.getTokenValue()).thenReturn("signed");
+        var captor = ArgumentCaptor.forClass(JwtEncoderParameters.class);
+        when(jwtEncoder.encode(captor.capture())).thenReturn(encoded);
+        tokenIssuer.issueAccessToken(account);
+        account.replaceRoles(java.util.Set.of(Role.LEARNER, Role.AUTHOR));
+        tokenIssuer.issueAccessToken(account);
+        assertThat(captor.getAllValues().getFirst().getClaims().<java.util.List<String>>getClaim("roles"))
+                .containsExactly("LEARNER");
+        assertThat(captor.getAllValues().getLast().getClaims().<java.util.List<String>>getClaim("roles"))
+                .containsExactlyInAnyOrder("LEARNER", "AUTHOR");
+    }
 }

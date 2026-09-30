@@ -4,7 +4,6 @@ import ch.admin.zas.jweb.laforge.authoring.domain.DraftState;
 import ch.admin.zas.jweb.laforge.authoring.dto.DraftDto;
 import ch.admin.zas.jweb.laforge.authoring.dto.DraftInput;
 import ch.admin.zas.jweb.laforge.authoring.dto.DraftUpdateInput;
-import ch.admin.zas.jweb.laforge.authoring.dto.ReviewInput;
 import ch.admin.zas.jweb.laforge.authoring.service.AuthoringService;
 import ch.admin.zas.jweb.laforge.catalog.dto.ExerciseDto;
 import ch.admin.zas.jweb.laforge.common.concurrency.ETagSupport;
@@ -38,7 +37,7 @@ public class DraftController {
     }
 
     @GetMapping("/authoring/drafts")
-    @PreAuthorize("hasAnyRole('AUTHOR', 'REVIEWER', 'ADMIN')")
+    @PreAuthorize("hasAnyRole('AUTHOR', 'ADMIN')")
     public Page<DraftDto> listDrafts(
             @CurrentAccount CurrentAccountDto account,
             @RequestParam(required = false) Integer limit,
@@ -56,7 +55,7 @@ public class DraftController {
     }
 
     @GetMapping("/authoring/drafts/{draftId}")
-    @PreAuthorize("hasAnyRole('AUTHOR', 'REVIEWER', 'ADMIN')")
+    @PreAuthorize("hasAnyRole('AUTHOR', 'ADMIN')")
     public ResponseEntity<DraftDto> getDraft(@CurrentAccount CurrentAccountDto account, @PathVariable UUID draftId) {
         var draft = authoringService.getDraft(account, draftId);
         return ETagSupport.withETag(HttpStatus.OK, draft.revision(), draft);
@@ -70,28 +69,6 @@ public class DraftController {
             @RequestHeader(value = "If-Match", required = false) String ifMatch,
             @Valid @RequestBody DraftUpdateInput input) {
         var draft = authoringService.replaceDraft(account, draftId, ETagSupport.requireRevision(ifMatch), input.content());
-        return ETagSupport.withETag(HttpStatus.OK, draft.revision(), draft);
-    }
-
-    @PostMapping("/authoring/drafts/{draftId}/submit")
-    @PreAuthorize("hasAnyRole('AUTHOR', 'ADMIN')")
-    public ResponseEntity<DraftDto> submitDraftForReview(
-            @CurrentAccount CurrentAccountDto account,
-            @PathVariable UUID draftId,
-            @RequestHeader(value = "If-Match", required = false) String ifMatch) {
-        var draft = authoringService.submitDraftForReview(account, draftId, ETagSupport.requireRevision(ifMatch));
-        return ETagSupport.withETag(HttpStatus.OK, draft.revision(), draft);
-    }
-
-    @PostMapping("/authoring/drafts/{draftId}/review")
-    @PreAuthorize("hasAnyRole('REVIEWER', 'ADMIN')")
-    public ResponseEntity<DraftDto> reviewDraft(
-            @CurrentAccount CurrentAccountDto account,
-            @PathVariable UUID draftId,
-            @RequestHeader(value = "If-Match", required = false) String ifMatch,
-            @Valid @RequestBody ReviewInput input) {
-        var draft = authoringService.reviewDraft(
-                account, draftId, ETagSupport.requireRevision(ifMatch), input.decision(), input.comment());
         return ETagSupport.withETag(HttpStatus.OK, draft.revision(), draft);
     }
 

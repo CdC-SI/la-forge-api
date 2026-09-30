@@ -2,6 +2,10 @@ package ch.admin.zas.jweb.laforge.security.config;
 
 import ch.admin.zas.jweb.laforge.common.error.ProblemCode;
 import ch.admin.zas.jweb.laforge.common.error.ProblemResponseWriter;
+import ch.admin.zas.jweb.laforge.security.domain.Role;
+import java.util.Arrays;
+import java.util.Set;
+import java.util.stream.Collectors;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -53,7 +57,10 @@ public class SecurityConfig {
         authoritiesConverter.setAuthoritiesClaimName("roles");
         authoritiesConverter.setAuthorityPrefix("ROLE_");
         var converter = new JwtAuthenticationConverter();
-        converter.setJwtGrantedAuthoritiesConverter(authoritiesConverter);
+        Set<String> recognized = Arrays.stream(Role.values()).map(role -> "ROLE_" + role.name())
+                .collect(Collectors.toSet());
+        converter.setJwtGrantedAuthoritiesConverter(jwt -> authoritiesConverter.convert(jwt).stream()
+                .filter(authority -> recognized.contains(authority.getAuthority())).toList());
         return converter;
     }
 }
