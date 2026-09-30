@@ -1,0 +1,3676 @@
+openapi: 3.0.3
+info:
+  title: La Forge API
+  version: 0.1.0
+  description: |
+    Contrat du prototype de laboratoire d’entraînement technique. Texte métier en français, identifiants API en anglais.
+
+    Périmètre : profil, catalogue, exercices versionnés, tentatives, indices, corrigés, révisions, veille, défis collectifs, édition et tuteur IA optionnel. Pas d’exécution distante de code, génération automatique de contenus, classement RH ou gestion multi-entreprises. Une installation correspond à une entreprise ou un groupe pilote. Les rôles sont gérés hors API.
+
+    Authentification : compte créé localement via /auth/registrations (email + mot de passe), activé par confirmation
+    du jeton de vérification reçu par courriel (/auth/verifications). Connexion via /auth/sessions : le serveur émet
+    lui-même un bearer JWT de courte durée (signature RS256) accompagné d’un jeton de renouvellement opaque
+    (/auth/sessions/refresh). Le serveur valide signature, issuer, audience et expiration ; utilisateur courant déduit
+    de sub, jamais du corps de requête. Rôles LEARNER, AUTHOR, REVIEWER, ADMIN cumulatifs ; tous les comptes peuvent
+    pratiquer dès activation. x-required-roles signifie au moins un rôle de la liste, plus les contraintes de propriété
+    décrites. ADMIN n’accorde pas l’accès aux tentatives privées des autres.
+
+    Isolation : 404 pour une ressource hors périmètre, 403 pour un rôle insuffisant ou une condition de déblocage non remplie dans une ressource accessible. Les projections catalogue n’exposent jamais de corrigé. Les accès éditoriaux constituent une exception volontaire pour les auteurs/relecteurs ; le produit n’est pas un dispositif anti-triche ou de certification.
+
+    Versions : une publication est immuable et reste lisible. Tentatives et défis référencent explicitement exercice + version. Tous les timestamps sont RFC 3339 avec offset ; le serveur utilise UTC et son horloge pour les échéances. À now >= closesAt le défi est fermé, sans tâche planifiée nécessaire.
+
+    Révisions : algorithme fixe documenté dans les opérations, pas de promesse d’adaptation scientifique. Les compteurs et files de révision sont mis à jour atomiquement à la soumission. Les réponses libres sont discutées et autoévaluées, jamais notées automatiquement par un LLM.
+
+    HTTP : JSON UTF-8, erreurs application/problem+json, propriétés d’entrée inconnues rejetées. PUT remplace complètement la ressource concernée. Pagination stable par clés documentées et curseur opaque ; insertions concurrentes peuvent apparaître à la prochaine navigation. Lecture sans effet de bord. Les répétitions idempotentes ne créent ni tentative, commentaire ni échéance supplémentaires.
+
+    Concurrence : If-Match fort obligatoire pour mutations éditoriales du brouillon ; validation et transition atomiques. Sur les POST avec Idempotency-Key, même clé/corps pendant 24 h rejoue la réponse originale. Les autres mutations documentent leurs règles de répétition et de conflit. Le frontend doit conserver la clé jusqu’à obtention du résultat.
+
+    Sécurité de rendu : Markdown et code sont des contenus non fiables ; assainir le HTML au rendu, ne jamais exécuter le code fourni. Les URL de sources sont des liens, aucune récupération arbitraire serveur implicite. Les réponses privées utilisent Cache-Control: private, no-store. Les liens collectifs exigent toujours authentification et inscription. L’IA ne reçoit que les données autorisées et ses réponses n’écrasent jamais un corrigé validé.
+
+    Parcours minimal : GET /me/dashboard → GET /exercises/{id}/versions/{version} → POST /attempts → PUT /attempts/{id}/submission → GET /attempts/{id}/debrief → PUT /attempts/{id}/self-assessment. Parcours collectif : créer → rejoindre avec code → tenter → soumettre → comparer → discuter. Parcours éditorial : DRAFT → IN_REVIEW → APPROVED → PUBLISHED, retour DRAFT si changements demandés.
+servers:
+- url: /api/v1
+  description: Même origine que le frontend ; préfixe de la v1.
+security:
+- bearerAuth: []
+tags:
+- name: Auth
+  description: Création de compte, confirmation par courriel et sessions JWT
+- name: Profile
+  description: Profil et suivi privé
+- name: Catalog
+  description: Catalogue publié sans corrigés
+- name: Practice
+  description: Tentatives et répétition
+- name: Tutor
+  description: Assistance IA après soumission, optionnelle
+- name: Discoveries
+  description: Fiches de veille sourcées
+- name: Collective
+  description: Défis partagés et débrief collectif
+- name: Authoring
+  description: Contenus et validation éditoriale
+paths:
+  /auth/registrations:
+    post:
+      tags:
+      - Auth
+      operationId: registerAccount
+      summary: Créer un compte
+      description: Crée un compte en attente d’activation et envoie un courriel de confirmation contenant un jeton
+        à usage unique valable 24 h. Réponse 202 constante que l’adresse existe déjà ou non, afin de ne jamais
+        révéler l’existence d’un compte. Aucune authentification requise.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegistrationInput'
+      responses:
+        '202':
+          description: Demande d’inscription acceptée ; courriel envoyé si l’adresse est éligible.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /auth/verifications:
+    post:
+      tags:
+      - Auth
+      operationId: verifyAccount
+      summary: Confirmer le compte
+      description: Valide le jeton reçu par courriel, active le compte et attribue le rôle LEARNER. Jeton à usage
+        unique, expiré après 24 h ou après utilisation.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerificationInput'
+      responses:
+        '200':
+          description: Compte activé.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /auth/verifications/resend:
+    post:
+      tags:
+      - Auth
+      operationId: resendVerification
+      summary: Renvoyer le courriel de confirmation
+      description: Renvoie un nouveau jeton de vérification si le compte existe et n’est pas déjà actif. Réponse
+        202 constante, limitée en débit par adresse.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResendVerificationInput'
+      responses:
+        '202':
+          description: Demande acceptée ; courriel renvoyé si éligible.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /auth/sessions:
+    post:
+      tags:
+      - Auth
+      operationId: createSession
+      summary: Se connecter
+      description: Authentifie par email et mot de passe un compte activé, émet un jeton d’accès JWT de courte durée
+        et un jeton de renouvellement opaque.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginInput'
+      responses:
+        '200':
+          description: Session créée.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags:
+      - Auth
+      operationId: revokeSession
+      summary: Se déconnecter
+      description: Révoque le jeton de renouvellement fourni. Idempotent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '204':
+          description: Session révoquée.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /auth/sessions/refresh:
+    post:
+      tags:
+      - Auth
+      operationId: refreshSession
+      summary: Renouveler la session
+      description: Échange un jeton de renouvellement valide contre un nouveau jeton d’accès et un nouveau jeton
+        de renouvellement (rotation). La réutilisation d’un jeton déjà consommé révoque toute la famille de jetons.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '200':
+          description: Session renouvelée.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /me:
+    get:
+      tags:
+      - Profile
+      operationId: getMe
+      summary: Lire le profil courant
+      description: Lire le profil courant
+      responses:
+        '200':
+          description: Lire le profil courant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /me/preferences:
+    put:
+      tags:
+      - Profile
+      operationId: replaceMyPreferences
+      summary: Remplacer les préférences
+      description: Remplacement complet des préférences. Les topicIds doivent exister. Aucun changement des rôles
+        ou de l’identité.
+      responses:
+        '200':
+          description: Remplacer les préférences.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Preferences'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Preferences'
+  /me/dashboard:
+    get:
+      tags:
+      - Profile
+      operationId: getMyDashboard
+      summary: Obtenir les suggestions personnelles
+      description: Obtenir les suggestions personnelles
+      responses:
+        '200':
+          description: Obtenir les suggestions personnelles.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Dashboard'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /me/progress:
+    get:
+      tags:
+      - Profile
+      operationId: getMyProgress
+      summary: Lire la progression privée
+      description: Lire la progression privée
+      responses:
+        '200':
+          description: Lire la progression privée.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Progress'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /topics:
+    get:
+      tags:
+      - Catalog
+      operationId: listTopics
+      summary: Lister les thèmes
+      description: Référentiel initial chargé avec le contenu du pilote. Ordre label puis id ; gestion du référentiel
+        hors API MVP.
+      responses:
+        '200':
+          description: Lister les thèmes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopicPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+  /exercises:
+    get:
+      tags:
+      - Catalog
+      operationId: listExercises
+      summary: Lister les exercices publiés
+      description: Dernière version publiée de chaque exercice. Filtres combinés par ET ; q cherche dans titre et
+        énoncé, jamais dans le corrigé. Ordre publishedAt décroissant puis id.
+      responses:
+        '200':
+          description: Lister les exercices publiés.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExercisePage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+      - name: type
+        in: query
+        schema:
+          $ref: '#/components/schemas/ExerciseType'
+        description: ''
+      - name: difficulty
+        in: query
+        schema:
+          $ref: '#/components/schemas/Difficulty'
+        description: ''
+      - name: topicId
+        in: query
+        schema:
+          type: string
+          format: uuid
+        description: ''
+      - name: technology
+        in: query
+        schema:
+          type: string
+          maxLength: 60
+        description: ''
+      - name: q
+        in: query
+        schema:
+          type: string
+          maxLength: 200
+        description: ''
+  /exercises/{exerciseId}:
+    get:
+      tags:
+      - Catalog
+      operationId: getLatestExercise
+      summary: Lire la dernière version publiée
+      description: Sans indices ni correction. L’identifiant de version doit être conservé lors de la création d’une
+        tentative.
+      responses:
+        '200':
+          description: Lire la dernière version publiée.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Exercise'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - name: exerciseId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /exercises/{exerciseId}/versions/{version}:
+    get:
+      tags:
+      - Catalog
+      operationId: getExerciseVersion
+      summary: Lire une version publiée précise
+      description: Les anciennes versions restent accessibles aux utilisateurs authentifiés. Une publication ultérieure
+        ne change jamais cet énoncé.
+      responses:
+        '200':
+          description: Lire une version publiée précise.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Exercise'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - name: exerciseId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: version
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+          minimum: 1
+  /attempts:
+    post:
+      tags:
+      - Practice
+      operationId: createAttempt
+      summary: Commencer une tentative
+      description: 'Utilisateur courant uniquement. En cas de tentative IN_PROGRESS existante hors défi : 409. Pour
+        un défi, exige inscription, état OPEN, absence de tentative précédente et correspondance exercice/version
+        ; toute pratique antérieure soumise ou indice déjà révélé sur cette version hors de ce défi interdit la
+        tentative de défi (409). Pour reviewItemId, exige révision due et aucune tentative liée en cours ; soumettre
+        clôture cette révision. Le statut initial est IN_PROGRESS.'
+      responses:
+        '201':
+          description: Commencer une tentative.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Attempt'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAttempt'
+  /me/attempts:
+    get:
+      tags:
+      - Practice
+      operationId: listMyAttempts
+      summary: Lister mes tentatives
+      description: Ordre startedAt décroissant puis id. Ne retourne que les tentatives de l’appelant.
+      responses:
+        '200':
+          description: Lister mes tentatives.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttemptPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+      - name: status
+        in: query
+        schema:
+          type: string
+          enum:
+          - IN_PROGRESS
+          - SUBMITTED
+          - ABANDONED
+        description: ''
+  /attempts/{attemptId}:
+    get:
+      tags:
+      - Practice
+      operationId: getAttempt
+      summary: Lire ma tentative
+      description: Accès propriétaire uniquement, sinon 404.
+      responses:
+        '200':
+          description: Lire ma tentative.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Attempt'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - name: attemptId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /attempts/{attemptId}/submission:
+    put:
+      tags:
+      - Practice
+      operationId: submitAttempt
+      summary: Soumettre la réponse définitive
+      description: 'Transition atomique IN_PROGRESS → SUBMITTED. Valide le format et les références ; réponse ensuite
+        immuable. Même réponse canonique déjà soumise : 200 sans répéter les effets ; réponse différente : 409.
+        Défi fermé et tentative non soumise : 409. Débloque le débrief ; déclenche une révision si choix incorrect
+        ou confiance ≤ 2. Clôture la révision source le cas échéant. Aucune dépendance à l’IA.'
+      responses:
+        '200':
+          description: Soumettre la réponse définitive.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Attempt'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - name: attemptId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitAnswer'
+  /attempts/{attemptId}/abandon:
+    post:
+      tags:
+      - Practice
+      operationId: abandonAttempt
+      summary: Abandonner une tentative individuelle
+      description: 'IN_PROGRESS → ABANDONED, appel répété : 200. Tentative soumise ou liée à un défi : 409. Une
+        révision source reste due. Propriétaire uniquement.'
+      responses:
+        '200':
+          description: Abandonner une tentative individuelle.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Attempt'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - name: attemptId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /attempts/{attemptId}/hints:
+    post:
+      tags:
+      - Practice
+      operationId: revealHint
+      summary: Débloquer un indice
+      description: 'Propriétaire, tentative IN_PROGRESS. Les indices se débloquent dans l’ordre à partir de 1. Un
+        niveau déjà révélé retourne le même indice sans nouvel effet ; saut de niveau : 409 ; niveau inexistant
+        : 422. Indices interdits en défi (403) pour conserver la comparaison des raisonnements initiaux.'
+      responses:
+        '200':
+          description: Débloquer un indice.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Hint'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - name: attemptId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HintRequest'
+  /attempts/{attemptId}/debrief:
+    get:
+      tags:
+      - Practice
+      operationId: getDebrief
+      summary: Lire le corrigé et le résultat
+      description: Propriétaire uniquement. SUBMITTED requis, sinon 409. Correspond exactement à la version figée
+        dans la tentative. Aucun appel au modèle nécessaire.
+      responses:
+        '200':
+          description: Lire le corrigé et le résultat.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Debrief'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - name: attemptId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /attempts/{attemptId}/self-assessment:
+    put:
+      tags:
+      - Practice
+      operationId: setSelfAssessment
+      summary: Enregistrer mon autoévaluation
+      description: SUBMITTED requis. Crée ou actualise un unique ReviewItem de suivi pour cette tentative. AGAIN/HARD/GOOD/EASY
+        planifient respectivement à submittedAt + 1/3/7/21 jours (intervalles fixes du pilote, 24 h). Une date passée
+        reste due immédiatement. Répéter la même autoévaluation ne décale pas la date. Une révision déjà commencée
+        ou terminée ne peut plus être replanifiée (409). Remplace la planification automatique initiale.
+      responses:
+        '200':
+          description: Enregistrer mon autoévaluation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewItem'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - name: attemptId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SelfAssessment'
+  /me/reviews:
+    get:
+      tags:
+      - Practice
+      operationId: listMyReviews
+      summary: Lister mes révisions
+      description: 'Par défaut DUE. Ordre dueAt croissant puis id. Révision automatique : submittedAt + 1 jour pour
+        erreur objective, sinon + 3 jours si confiance ≤ 2 ; une seule entrée par tentative. Même version rejouée
+        dans le MVP ; variantes éditoriales possibles ultérieurement. État DUE calculé par rapport à l’heure serveur.'
+      responses:
+        '200':
+          description: Lister mes révisions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+      - name: state
+        in: query
+        schema:
+          type: string
+          enum:
+          - DUE
+          - SCHEDULED
+          - COMPLETED
+        description: ''
+  /attempts/{attemptId}/tutor-exchanges:
+    get:
+      tags:
+      - Tutor
+      operationId: listTutorExchanges
+      summary: Lire mes échanges avec le tuteur
+      description: Propriétaire uniquement, tentative SUBMITTED requise. Historique disponible même si IA désactivée.
+        Ordre createdAt croissant puis id.
+      responses:
+        '200':
+          description: Lire mes échanges avec le tuteur.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TutorPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - name: attemptId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+    post:
+      tags:
+      - Tutor
+      operationId: askTutor
+      summary: Poser une question après le débrief
+      description: Optionnel. Propriétaire et SUBMITTED requis. Réponse JSON synchrone, délai serveur maximal 30
+        s puis 503 ; aucun streaming dans ce contrat. Un échange complet est persisté atomiquement après succès.
+        Maximum une génération simultanée par tentative (409). Contexte limité à l’exercice, au corrigé, à cette
+        réponse et à cet historique ; aucun accès aux données des collègues. Ne modifie aucune évaluation.
+      responses:
+        '201':
+          description: Poser une question après le débrief.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TutorExchange'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+      parameters:
+      - name: attemptId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TutorQuestion'
+  /articles:
+    get:
+      tags:
+      - Discoveries
+      operationId: listArticles
+      summary: Lister les fiches de veille
+      description: Fiches publiées. Filtres par ET ; q cherche titre et résumé. Ordre publishedAt décroissant puis
+        id.
+      responses:
+        '200':
+          description: Lister les fiches de veille.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArticlePage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+      - name: topicId
+        in: query
+        schema:
+          type: string
+          format: uuid
+        description: ''
+      - name: technology
+        in: query
+        schema:
+          type: string
+          maxLength: 60
+        description: ''
+      - name: q
+        in: query
+        schema:
+          type: string
+          maxLength: 200
+        description: ''
+  /articles/{articleId}:
+    get:
+      tags:
+      - Discoveries
+      operationId: getArticle
+      summary: Lire une fiche de veille
+      description: Lire une fiche de veille
+      responses:
+        '200':
+          description: Lire une fiche de veille.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Article'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - name: articleId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /authoring/articles:
+    post:
+      tags:
+      - Authoring
+      operationId: publishArticle
+      summary: Publier une fiche de veille
+      description: REVIEWER ou ADMIN. Publication immédiate après validation éditoriale hors ligne ; état initial
+        revision=1. Le serveur vérifie thèmes et exercices liés. Corps Markdown assaini au rendu.
+      responses:
+        '201':
+          description: Publier une fiche de veille.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Article'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ArticleInput'
+      x-required-roles:
+      - REVIEWER
+      - ADMIN
+  /authoring/articles/{articleId}:
+    put:
+      tags:
+      - Authoring
+      operationId: updateArticle
+      summary: Corriger une fiche de veille
+      description: REVIEWER ou ADMIN. expectedRevision doit égaler revision actuelle, sinon 409. Incrémente revision,
+        conserve publishedAt et actualise updatedAt. Les fiches ne servent jamais de correction figée d’une tentative.
+      responses:
+        '200':
+          description: Corriger une fiche de veille.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Article'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - name: articleId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ArticleUpdate'
+      x-required-roles:
+      - REVIEWER
+      - ADMIN
+  /challenges:
+    post:
+      tags:
+      - Collective
+      operationId: createChallenge
+      summary: Créer un défi à partager
+      description: Tout utilisateur authentifié. Le créateur devient participant. Le code d’invitation n’accorde
+        aucun accès anonyme. Le créateur est soumis aux mêmes règles de déblocage que les autres.
+      responses:
+        '201':
+          description: Créer un défi à partager.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChallengeCreated'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChallengeInput'
+  /me/challenges:
+    get:
+      tags:
+      - Collective
+      operationId: listMyChallenges
+      summary: Lister mes défis
+      description: Défis créés ou rejoints, ordre closesAt décroissant puis id. Aucun annuaire des défis privés.
+      responses:
+        '200':
+          description: Lister mes défis.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChallengePage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+  /challenges/join:
+    post:
+      tags:
+      - Collective
+      operationId: joinChallenge
+      summary: Rejoindre un défi via son code
+      description: 'Code invalide : 404 ; défi fermé : 409. Appel répété pour membre existant : 200, même si fermé.
+        Refuse 409 si l’utilisateur a déjà soumis une tentative ou révélé un indice sur cette version hors défi.
+        À l’inscription, expliquer que la réponse sera partagée avec les participants ayant soumis.'
+      responses:
+        '200':
+          description: Rejoindre un défi via son code.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Challenge'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JoinChallenge'
+  /challenges/{challengeId}:
+    get:
+      tags:
+      - Collective
+      operationId: getChallenge
+      summary: Lire un défi rejoint
+      description: 'Participants uniquement ; autres utilisateurs : 404. responsesUnlocked vrai seulement si l’appelant
+        a soumis dans ce défi, même pour le créateur.'
+      responses:
+        '200':
+          description: Lire un défi rejoint.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Challenge'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - name: challengeId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /challenges/{challengeId}/close:
+    post:
+      tags:
+      - Collective
+      operationId: closeChallenge
+      summary: Fermer mon défi
+      description: 'Créateur uniquement, sinon 403 pour un participant. OPEN → CLOSED ; appel répété : 200. Révoque
+        le code, bloque les nouvelles inscriptions et soumissions. Les réponses déjà soumises et discussions restent
+        accessibles aux participants ayant soumis.'
+      responses:
+        '200':
+          description: Fermer mon défi.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Challenge'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - name: challengeId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /challenges/{challengeId}/responses:
+    get:
+      tags:
+      - Collective
+      operationId: listSharedResponses
+      summary: Comparer les réponses du défi
+      description: 'Participant ayant soumis dans ce défi requis, sinon 403 (non membre : 404). Inclut sa propre
+        réponse. Ordre submittedAt croissant puis id. Ne révèle aucune autre tentative, statistique personnelle
+        ou conversation IA.'
+      responses:
+        '200':
+          description: Comparer les réponses du défi.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SharedResponsePage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - name: challengeId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+  /challenges/{challengeId}/comments:
+    get:
+      tags:
+      - Collective
+      operationId: listChallengeComments
+      summary: Lire la discussion du défi
+      description: Participant ayant soumis requis ; sinon 403, ou 404 si non membre. Ordre createdAt croissant
+        puis id.
+      responses:
+        '200':
+          description: Lire la discussion du défi.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommentPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - name: challengeId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+    post:
+      tags:
+      - Collective
+      operationId: createChallengeComment
+      summary: Participer au débrief collectif
+      description: Participant ayant soumis requis ; sinon 403, ou 404 si non membre. Autorisé après fermeture.
+        Texte brut, aucun HTML interprété.
+      responses:
+        '201':
+          description: Participer au débrief collectif.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiscussionComment'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - name: challengeId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommentInput'
+  /authoring/drafts:
+    get:
+      tags:
+      - Authoring
+      operationId: listDrafts
+      summary: Lister les brouillons accessibles
+      description: 'AUTHOR : ses brouillons ; REVIEWER : brouillons IN_REVIEW et ceux qu’il a déjà relus ; ADMIN
+        : tous. Rôles cumulatifs. Ordre updatedAt décroissant puis id. Contenu incluant le corrigé réservé à ce
+        périmètre éditorial.'
+      responses:
+        '200':
+          description: Lister les brouillons accessibles.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DraftPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+      - name: state
+        in: query
+        schema:
+          type: string
+          enum:
+          - DRAFT
+          - IN_REVIEW
+          - APPROVED
+          - PUBLISHED
+        description: ''
+      x-required-roles:
+      - AUTHOR
+      - REVIEWER
+      - ADMIN
+    post:
+      tags:
+      - Authoring
+      operationId: createDraft
+      summary: Créer un brouillon ou une nouvelle version
+      description: 'AUTHOR ou ADMIN. Nouvel exercice : exerciseId attribué côté serveur et baseVersion=0. Révision
+        existante : propriétaire de l’exercice ou ADMIN, baseVersion figée sur dernière publication. Un seul brouillon
+        actif par exercice, sinon 409. État DRAFT, revision=1.'
+      responses:
+        '201':
+          description: Créer un brouillon ou une nouvelle version.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Draft'
+          headers:
+            ETag:
+              description: Version forte du brouillon, par exemple "7". À recopier dans If-Match.
+              schema:
+                type: string
+              example: '"7"'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DraftInput'
+      x-required-roles:
+      - AUTHOR
+      - ADMIN
+  /authoring/drafts/{draftId}:
+    get:
+      tags:
+      - Authoring
+      operationId: getDraft
+      summary: Lire un brouillon et son ETag
+      description: Même périmètre que listDrafts ; sinon 404.
+      responses:
+        '200':
+          description: Lire un brouillon et son ETag.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Draft'
+          headers:
+            ETag:
+              description: Version forte du brouillon, par exemple "7". À recopier dans If-Match.
+              schema:
+                type: string
+              example: '"7"'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - name: draftId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      x-required-roles:
+      - AUTHOR
+      - REVIEWER
+      - ADMIN
+    put:
+      tags:
+      - Authoring
+      operationId: replaceDraft
+      summary: Remplacer le contenu du brouillon
+      description: Auteur propriétaire ou ADMIN ; DRAFT uniquement, sinon 409. Remplacement atomique, incrémente
+        revision. Les anciennes reviews restent dans l’historique mais ne valent jamais approbation de la nouvelle
+        révision.
+      responses:
+        '200':
+          description: Remplacer le contenu du brouillon.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Draft'
+          headers:
+            ETag:
+              description: Version forte du brouillon, par exemple "7". À recopier dans If-Match.
+              schema:
+                type: string
+              example: '"7"'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '428':
+          $ref: '#/components/responses/PreconditionRequired'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - name: draftId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DraftUpdate'
+      x-required-roles:
+      - AUTHOR
+      - ADMIN
+  /authoring/drafts/{draftId}/submit:
+    post:
+      tags:
+      - Authoring
+      operationId: submitDraftForReview
+      summary: Soumettre le brouillon à relecture
+      description: Auteur propriétaire ou ADMIN. DRAFT → IN_REVIEW. Vérifie cohérence complète des choix, corrigé,
+        indices, références et thèmes. Incrémente revision. Aucune publication automatique.
+      responses:
+        '200':
+          description: Soumettre le brouillon à relecture.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Draft'
+          headers:
+            ETag:
+              description: Version forte du brouillon, par exemple "7". À recopier dans If-Match.
+              schema:
+                type: string
+              example: '"7"'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '428':
+          $ref: '#/components/responses/PreconditionRequired'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - name: draftId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/IfMatch'
+      x-required-roles:
+      - AUTHOR
+      - ADMIN
+  /authoring/drafts/{draftId}/review:
+    post:
+      tags:
+      - Authoring
+      operationId: reviewDraft
+      summary: Approuver ou demander des changements
+      description: REVIEWER ou ADMIN, IN_REVIEW uniquement. APPROVE → APPROVED ; REQUEST_CHANGES → DRAFT. Incrémente
+        revision et enregistre la décision. Pour un pilote individuel, autoapprobation autorisée uniquement à ADMIN
+        et consignée dans reviews ; REVIEWER ne peut pas approuver son propre contenu (403).
+      responses:
+        '200':
+          description: Approuver ou demander des changements.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Draft'
+          headers:
+            ETag:
+              description: Version forte du brouillon, par exemple "7". À recopier dans If-Match.
+              schema:
+                type: string
+              example: '"7"'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '428':
+          $ref: '#/components/responses/PreconditionRequired'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - name: draftId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewInput'
+      x-required-roles:
+      - REVIEWER
+      - ADMIN
+  /authoring/drafts/{draftId}/publish:
+    post:
+      tags:
+      - Authoring
+      operationId: publishDraft
+      summary: Publier la version approuvée
+      description: 'Auteur propriétaire ou ADMIN. APPROVED requis. Vérifie que baseVersion est toujours la dernière
+        version publiée, sinon 409. Publication atomique : nouvelle version immuable baseVersion+1, brouillon PUBLISHED
+        et revision incrémentée. Corrigé et indices stockés avec cette version ; seules les projections apprenant
+        sont retournées. Nouvelle modification : nouveau brouillon.'
+      responses:
+        '200':
+          description: Publier la version approuvée.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Exercise'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '428':
+          $ref: '#/components/responses/PreconditionRequired'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      parameters:
+      - name: draftId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/IfMatch'
+      x-required-roles:
+      - AUTHOR
+      - ADMIN
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Jeton du fournisseur d’identité configuré. Acquisition hors périmètre.
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+      description: Nombre maximal d’éléments.
+    Cursor:
+      name: cursor
+      in: query
+      schema:
+        type: string
+        maxLength: 1000
+      description: Curseur opaque retourné par la page précédente.
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      schema:
+        type: string
+        maxLength: 100
+        minLength: 1
+      description: 'ETag fort exact obtenu sur le brouillon. Pas de joker. Absent : 428 ; obsolète : 412.'
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: 'UUID généré par le client, unique pour utilisateur + méthode + chemin. Conservation 24 h. Même
+        clé et même corps : réponse originale sans répéter l’effet. Autre corps : 409. Déduplication atomique, y
+        compris des appels IA. Opération encore en cours : 409 INVALID_STATE, réessayer avec la même clé.'
+  responses:
+    BadRequest:
+      description: Requête syntaxiquement invalide.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unauthenticated:
+      description: Jeton absent, expiré ou invalide.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+      headers:
+        WWW-Authenticate:
+          description: Challenge Bearer.
+          schema:
+            type: string
+          example: Bearer
+    Forbidden:
+      description: Rôle insuffisant ou déblocage pédagogique non acquis.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotFound:
+      description: Ressource inexistante ou non accessible dans le périmètre de l’appelant.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Conflict:
+      description: Transition interdite, tentative déjà finalisée, version de base obsolète ou conflit d’idempotence.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    PreconditionFailed:
+      description: ETag du brouillon obsolète.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    ValidationFailed:
+      description: Données ou contraintes métier invalides ; violations détaille les champs.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    PreconditionRequired:
+      description: If-Match requis.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    TooManyRequests:
+      description: Quota dépassé ; respecter Retry-After.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+      headers:
+        Retry-After:
+          description: Délai minimal en secondes avant nouvel essai, si disponible.
+          schema:
+            type: integer
+            format: int32
+            minimum: 0
+    InternalError:
+      description: Erreur serveur inattendue.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    ServiceUnavailable:
+      description: Assistance IA désactivée ou indisponible ; aucun échange partiel enregistré.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+      headers:
+        Retry-After:
+          description: Délai minimal en secondes avant nouvel essai, si disponible.
+          schema:
+            type: integer
+            format: int32
+            minimum: 0
+  schemas:
+    RegistrationInput:
+      type: object
+      additionalProperties: false
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 320
+        password:
+          type: string
+          minLength: 12
+          maxLength: 200
+          description: Vérifié côté serveur ; jamais retourné ni journalisé en clair.
+        displayName:
+          type: string
+          maxLength: 200
+          minLength: 1
+      required:
+      - email
+      - password
+      - displayName
+      description: Réponse toujours 202, y compris si l’adresse est déjà utilisée, pour ne pas révéler l’existence
+        d’un compte.
+    VerificationInput:
+      type: object
+      additionalProperties: false
+      properties:
+        token:
+          type: string
+          maxLength: 200
+          minLength: 1
+      required:
+      - token
+    ResendVerificationInput:
+      type: object
+      additionalProperties: false
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 320
+      required:
+      - email
+    LoginInput:
+      type: object
+      additionalProperties: false
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 320
+        password:
+          type: string
+          minLength: 1
+          maxLength: 200
+      required:
+      - email
+      - password
+    Session:
+      type: object
+      additionalProperties: false
+      properties:
+        accessToken:
+          type: string
+          maxLength: 8000
+        refreshToken:
+          type: string
+          maxLength: 500
+        tokenType:
+          type: string
+          enum:
+          - Bearer
+        expiresInSeconds:
+          type: integer
+          format: int32
+          minimum: 1
+        user:
+          $ref: '#/components/schemas/User'
+      required:
+      - accessToken
+      - refreshToken
+      - tokenType
+      - expiresInSeconds
+      - user
+    RefreshRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        refreshToken:
+          type: string
+          maxLength: 500
+          minLength: 1
+      required:
+      - refreshToken
+    ExerciseType:
+      type: string
+      enum:
+      - CODE_REVIEW
+      - PREDICTION
+      - DIAGNOSIS
+      - REFACTORING
+      - TECH_DISCOVERY
+      - TECHNICAL_CHOICE
+      - QUIZ
+    Difficulty:
+      type: string
+      enum:
+      - BEGINNER
+      - INTERMEDIATE
+      - ADVANCED
+    Problem:
+      type: object
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          format: uri-reference
+          example: urn:dev-practice:problem:invalid-state
+        title:
+          type: string
+          maxLength: 200
+          minLength: 1
+        status:
+          type: integer
+          format: int32
+          minimum: 400
+          maximum: 599
+        detail:
+          type: string
+          maxLength: 4000
+        instance:
+          type: string
+          format: uri-reference
+        code:
+          type: string
+          enum:
+          - BAD_REQUEST
+          - UNAUTHENTICATED
+          - FORBIDDEN
+          - NOT_FOUND
+          - INVALID_STATE
+          - IDEMPOTENCY_CONFLICT
+          - STALE_VERSION
+          - VALIDATION_FAILED
+          - PRECONDITION_REQUIRED
+          - RATE_LIMITED
+          - AI_UNAVAILABLE
+          - INTERNAL_ERROR
+        traceId:
+          type: string
+          maxLength: 100
+        violations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Violation'
+          maxItems: 100
+      required:
+      - type
+      - title
+      - status
+      - code
+      example:
+        type: urn:dev-practice:problem:invalid-state
+        title: Tentative déjà soumise
+        status: 409
+        code: INVALID_STATE
+        detail: La réponse définitive ne peut plus être modifiée.
+    Violation:
+      type: object
+      additionalProperties: false
+      properties:
+        field:
+          type: string
+          maxLength: 200
+          minLength: 1
+        message:
+          type: string
+          maxLength: 4000
+      required:
+      - field
+      - message
+    StackEntry:
+      type: object
+      additionalProperties: false
+      properties:
+        technology:
+          type: string
+          maxLength: 60
+          minLength: 1
+          example: Java
+        currentVersion:
+          type: string
+          maxLength: 40
+          minLength: 1
+          example: '17'
+        targetVersion:
+          type: string
+          maxLength: 40
+          minLength: 1
+          example: '21'
+      required:
+      - technology
+      - currentVersion
+    Preferences:
+      type: object
+      additionalProperties: false
+      properties:
+        stack:
+          type: array
+          items:
+            $ref: '#/components/schemas/StackEntry'
+          maxItems: 20
+        topicIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+          maxItems: 50
+          uniqueItems: true
+        difficulty:
+          $ref: '#/components/schemas/Difficulty'
+        sessionMinutes:
+          type: integer
+          format: int32
+          minimum: 5
+          maximum: 30
+        locale:
+          type: string
+          enum:
+          - fr
+          - en
+        timeZone:
+          type: string
+          maxLength: 100
+          example: Europe/Paris
+          description: Identifiant IANA validé par le serveur.
+      required:
+      - stack
+      - topicIds
+      - difficulty
+      - sessionMinutes
+      - locale
+      - timeZone
+    User:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+          maxLength: 200
+          minLength: 1
+        roles:
+          type: array
+          items:
+            type: string
+            enum:
+            - LEARNER
+            - AUTHOR
+            - REVIEWER
+            - ADMIN
+          maxItems: 4
+          uniqueItems: true
+        preferences:
+          $ref: '#/components/schemas/Preferences'
+      required:
+      - id
+      - displayName
+      - roles
+      - preferences
+    Topic:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+          maxLength: 80
+          pattern: ^[a-z0-9-]+$
+        label:
+          type: string
+          maxLength: 200
+          minLength: 1
+      required:
+      - id
+      - slug
+      - label
+    Source:
+      type: object
+      additionalProperties: false
+      properties:
+        title:
+          type: string
+          maxLength: 200
+          minLength: 1
+        url:
+          type: string
+          format: uri
+          maxLength: 2048
+        accessedAt:
+          type: string
+          format: date-time
+      required:
+      - title
+      - url
+      - accessedAt
+    TechnologyRequirement:
+      type: object
+      additionalProperties: false
+      properties:
+        technology:
+          type: string
+          maxLength: 200
+          minLength: 1
+        minimumVersion:
+          type: string
+          maxLength: 40
+          minLength: 1
+        featureStatus:
+          type: string
+          enum:
+          - STABLE
+          - PREVIEW
+          - INCUBATOR
+        notes:
+          type: string
+          maxLength: 4000
+      required:
+      - technology
+      - minimumVersion
+      - featureStatus
+    CodeFile:
+      type: object
+      additionalProperties: false
+      properties:
+        path:
+          type: string
+          maxLength: 240
+          minLength: 1
+          description: Chemin relatif logique, jamais utilisé directement comme chemin disque.
+        language:
+          type: string
+          maxLength: 40
+          minLength: 1
+          example: java
+        content:
+          type: string
+          maxLength: 50000
+        kind:
+          type: string
+          enum:
+          - SOURCE
+          - DIFF
+          - LOG
+          - TEST
+      required:
+      - path
+      - language
+      - content
+      - kind
+    Choice:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          maxLength: 50
+          pattern: ^[a-zA-Z0-9_-]+$
+        label:
+          type: string
+          maxLength: 2000
+          minLength: 1
+      required:
+      - id
+      - label
+    ResponseSpec:
+      type: object
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum:
+          - FREE_TEXT
+          - SINGLE_CHOICE
+          - MULTIPLE_CHOICE
+          - REVIEW
+        choices:
+          type: array
+          items:
+            $ref: '#/components/schemas/Choice'
+          maxItems: 10
+      required:
+      - kind
+      description: SINGLE_CHOICE/MULTIPLE_CHOICE exigent 2 à 10 choix aux identifiants uniques. FREE_TEXT/REVIEW
+        interdisent choices. QUIZ exige un format de choix. Les autres types peuvent utiliser tout format compatible
+        avec leur énoncé. Validation serveur, erreur 422.
+    ExerciseSummary:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          format: int32
+          minimum: 1
+        title:
+          type: string
+          maxLength: 200
+          minLength: 1
+        type:
+          $ref: '#/components/schemas/ExerciseType'
+        difficulty:
+          $ref: '#/components/schemas/Difficulty'
+        topicIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+          maxItems: 20
+          uniqueItems: true
+        estimatedMinutes:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 60
+        technologies:
+          type: array
+          items:
+            $ref: '#/components/schemas/TechnologyRequirement'
+          maxItems: 10
+        publishedAt:
+          type: string
+          format: date-time
+      required:
+      - id
+      - version
+      - title
+      - type
+      - difficulty
+      - topicIds
+      - estimatedMinutes
+      - technologies
+      - publishedAt
+    Exercise:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          format: int32
+          minimum: 1
+        title:
+          type: string
+          maxLength: 200
+          minLength: 1
+        type:
+          $ref: '#/components/schemas/ExerciseType'
+        difficulty:
+          $ref: '#/components/schemas/Difficulty'
+        topicIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+          maxItems: 20
+          uniqueItems: true
+        estimatedMinutes:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 60
+        technologies:
+          type: array
+          items:
+            $ref: '#/components/schemas/TechnologyRequirement'
+          maxItems: 10
+        publishedAt:
+          type: string
+          format: date-time
+        promptMarkdown:
+          type: string
+          maxLength: 20000
+          minLength: 1
+        learningObjectives:
+          type: array
+          items:
+            type: string
+            maxLength: 200
+            minLength: 1
+          maxItems: 10
+          minItems: 1
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/CodeFile'
+          maxItems: 10
+        responseSpec:
+          $ref: '#/components/schemas/ResponseSpec'
+        hintCount:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 5
+      required:
+      - id
+      - version
+      - title
+      - type
+      - difficulty
+      - topicIds
+      - estimatedMinutes
+      - technologies
+      - publishedAt
+      - promptMarkdown
+      - learningObjectives
+      - files
+      - responseSpec
+      - hintCount
+      description: Projection apprenant. Ne contient ni corrigé, ni bonne réponse, ni contenu des indices non débloqués.
+        Une version publiée est immuable.
+    RubricCriterion:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          maxLength: 50
+          minLength: 1
+        label:
+          type: string
+          maxLength: 200
+          minLength: 1
+        importance:
+          type: string
+          enum:
+          - BLOCKING
+          - MAJOR
+          - MINOR
+        explanationMarkdown:
+          type: string
+          maxLength: 20000
+          minLength: 1
+      required:
+      - id
+      - label
+      - importance
+      - explanationMarkdown
+    Correction:
+      type: object
+      additionalProperties: false
+      properties:
+        explanationMarkdown:
+          type: string
+          maxLength: 20000
+          minLength: 1
+        acceptedAnswers:
+          type: array
+          items:
+            type: string
+            maxLength: 4000
+            minLength: 1
+          maxItems: 20
+        correctChoiceIds:
+          type: array
+          items:
+            type: string
+            maxLength: 50
+          maxItems: 10
+          uniqueItems: true
+        expectedVerdicts:
+          type: array
+          items:
+            type: string
+            enum:
+            - APPROVE
+            - REQUEST_CHANGES
+            - NEED_INFORMATION
+          maxItems: 3
+          uniqueItems: true
+        criteria:
+          type: array
+          items:
+            $ref: '#/components/schemas/RubricCriterion'
+          maxItems: 20
+        sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/Source'
+          maxItems: 20
+          minItems: 1
+      required:
+      - explanationMarkdown
+      - acceptedAnswers
+      - criteria
+      - sources
+      description: Pour un choix, correctChoiceIds est obligatoire et référence les choix proposés (exactement un
+        pour SINGLE_CHOICE). Pour REVIEW, expectedVerdicts est obligatoire et non vide. Les propriétés incompatibles
+        sont interdites. Une réponse libre ne reçoit pas de note automatique de qualité.
+    Hint:
+      type: object
+      additionalProperties: false
+      properties:
+        level:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 5
+        markdown:
+          type: string
+          maxLength: 20000
+          minLength: 1
+      required:
+      - level
+      - markdown
+    ExerciseContent:
+      type: object
+      additionalProperties: false
+      properties:
+        title:
+          type: string
+          maxLength: 200
+          minLength: 1
+        type:
+          $ref: '#/components/schemas/ExerciseType'
+        difficulty:
+          $ref: '#/components/schemas/Difficulty'
+        topicIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+          maxItems: 20
+          uniqueItems: true
+        estimatedMinutes:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 60
+        technologies:
+          type: array
+          items:
+            $ref: '#/components/schemas/TechnologyRequirement'
+          maxItems: 10
+        promptMarkdown:
+          type: string
+          maxLength: 20000
+          minLength: 1
+        learningObjectives:
+          type: array
+          items:
+            type: string
+            maxLength: 200
+            minLength: 1
+          maxItems: 10
+          minItems: 1
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/CodeFile'
+          maxItems: 10
+        responseSpec:
+          $ref: '#/components/schemas/ResponseSpec'
+        hints:
+          type: array
+          items:
+            $ref: '#/components/schemas/Hint'
+          maxItems: 5
+        correction:
+          $ref: '#/components/schemas/Correction'
+      required:
+      - title
+      - type
+      - difficulty
+      - topicIds
+      - estimatedMinutes
+      - technologies
+      - promptMarkdown
+      - learningObjectives
+      - files
+      - responseSpec
+      - hints
+      - correction
+      description: Contenu éditorial complet, réservé à auteur habilité et relecteur. Indices contigus à partir
+        de 1. Les références, versions, choix et critères sont vérifiés avant publication.
+    DraftInput:
+      type: object
+      additionalProperties: false
+      properties:
+        exerciseId:
+          type: string
+          format: uuid
+        content:
+          $ref: '#/components/schemas/ExerciseContent'
+      required:
+      - content
+      description: 'exerciseId absent : nouvel exercice. Présent : nouvelle version d’un exercice dont l’appelant
+        est auteur ou administrateur. Une seule révision non publiée par exercice. Le serveur mémorise la version
+        publiée de base.'
+    DraftUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        content:
+          $ref: '#/components/schemas/ExerciseContent'
+      required:
+      - content
+    EditorialReview:
+      type: object
+      additionalProperties: false
+      properties:
+        reviewerId:
+          type: string
+          format: uuid
+        decision:
+          type: string
+          enum:
+          - APPROVE
+          - REQUEST_CHANGES
+        comment:
+          type: string
+          maxLength: 20000
+          minLength: 1
+        reviewedAt:
+          type: string
+          format: date-time
+      required:
+      - reviewerId
+      - decision
+      - comment
+      - reviewedAt
+    Draft:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        exerciseId:
+          type: string
+          format: uuid
+        authorId:
+          type: string
+          format: uuid
+        state:
+          type: string
+          enum:
+          - DRAFT
+          - IN_REVIEW
+          - APPROVED
+          - PUBLISHED
+        revision:
+          type: integer
+          format: int32
+          minimum: 1
+        baseVersion:
+          type: integer
+          format: int32
+          minimum: 0
+        content:
+          $ref: '#/components/schemas/ExerciseContent'
+        reviews:
+          type: array
+          items:
+            $ref: '#/components/schemas/EditorialReview'
+          maxItems: 100
+        publishedVersion:
+          type: integer
+          format: int32
+          minimum: 1
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+      - id
+      - exerciseId
+      - authorId
+      - state
+      - revision
+      - baseVersion
+      - content
+      - reviews
+      - updatedAt
+    ReviewInput:
+      type: object
+      additionalProperties: false
+      properties:
+        decision:
+          type: string
+          enum:
+          - APPROVE
+          - REQUEST_CHANGES
+        comment:
+          type: string
+          maxLength: 20000
+          minLength: 1
+      required:
+      - decision
+      - comment
+    FreeTextAnswer:
+      type: object
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum:
+          - FREE_TEXT
+        text:
+          type: string
+          maxLength: 20000
+          minLength: 1
+        reasoning:
+          type: string
+          maxLength: 10000
+          minLength: 1
+        confidence:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 5
+      required:
+      - kind
+      - text
+      - reasoning
+      - confidence
+    SingleChoiceAnswer:
+      type: object
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum:
+          - SINGLE_CHOICE
+        choiceId:
+          type: string
+          maxLength: 50
+          minLength: 1
+        reasoning:
+          type: string
+          maxLength: 10000
+          minLength: 1
+        confidence:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 5
+      required:
+      - kind
+      - choiceId
+      - reasoning
+      - confidence
+      example:
+        kind: SINGLE_CHOICE
+        choiceId: immutable-copy
+        reasoning: Je distingue copie indépendante et simple vue non modifiable.
+        confidence: 4
+    MultipleChoiceAnswer:
+      type: object
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum:
+          - MULTIPLE_CHOICE
+        choiceIds:
+          type: array
+          items:
+            type: string
+            maxLength: 50
+            minLength: 1
+          maxItems: 10
+          minItems: 1
+          uniqueItems: true
+        reasoning:
+          type: string
+          maxLength: 10000
+          minLength: 1
+        confidence:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 5
+      required:
+      - kind
+      - choiceIds
+      - reasoning
+      - confidence
+    LineComment:
+      type: object
+      additionalProperties: false
+      properties:
+        filePath:
+          type: string
+          maxLength: 240
+          minLength: 1
+        line:
+          type: integer
+          format: int32
+          minimum: 1
+        severity:
+          type: string
+          enum:
+          - BLOCKING
+          - MAJOR
+          - MINOR
+          - QUESTION
+        comment:
+          type: string
+          maxLength: 2000
+          minLength: 1
+      required:
+      - filePath
+      - line
+      - severity
+      - comment
+      description: Ligne 1-based du contenu du CodeFile identifié. Le serveur valide le chemin et les bornes.
+    ReviewAnswer:
+      type: object
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum:
+          - REVIEW
+        verdict:
+          type: string
+          enum:
+          - APPROVE
+          - REQUEST_CHANGES
+          - NEED_INFORMATION
+        comments:
+          type: array
+          items:
+            $ref: '#/components/schemas/LineComment'
+          maxItems: 30
+        reasoning:
+          type: string
+          maxLength: 10000
+          minLength: 1
+        confidence:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 5
+      required:
+      - kind
+      - verdict
+      - comments
+      - reasoning
+      - confidence
+      example:
+        kind: REVIEW
+        verdict: NEED_INFORMATION
+        comments: []
+        reasoning: Il manque le délai maximal acceptable et le comportement attendu si un service distant échoue.
+        confidence: 3
+    Answer:
+      oneOf:
+      - $ref: '#/components/schemas/FreeTextAnswer'
+      - $ref: '#/components/schemas/SingleChoiceAnswer'
+      - $ref: '#/components/schemas/MultipleChoiceAnswer'
+      - $ref: '#/components/schemas/ReviewAnswer'
+      discriminator:
+        propertyName: kind
+        mapping:
+          FREE_TEXT: '#/components/schemas/FreeTextAnswer'
+          SINGLE_CHOICE: '#/components/schemas/SingleChoiceAnswer'
+          MULTIPLE_CHOICE: '#/components/schemas/MultipleChoiceAnswer'
+          REVIEW: '#/components/schemas/ReviewAnswer'
+      description: Le kind doit correspondre au responseSpec de la version tentée. Choix, fichiers et lignes sont
+        validés côté serveur (422).
+    CreateAttempt:
+      type: object
+      additionalProperties: false
+      properties:
+        exerciseId:
+          type: string
+          format: uuid
+        exerciseVersion:
+          type: integer
+          format: int32
+          minimum: 1
+        challengeId:
+          type: string
+          format: uuid
+        reviewItemId:
+          type: string
+          format: uuid
+      required:
+      - exerciseId
+      - exerciseVersion
+      description: Version explicite pour éviter de changer d’énoncé en cours de parcours. challengeId et reviewItemId
+        sont mutuellement exclusifs. Le serveur vérifie la correspondance exercice/version et la propriété de la
+        révision.
+      example:
+        exerciseId: a3a4bd63-d3de-4875-9930-1027edb2a670
+        exerciseVersion: 1
+    Attempt:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        exerciseId:
+          type: string
+          format: uuid
+        exerciseVersion:
+          type: integer
+          format: int32
+          minimum: 1
+        challengeId:
+          type: string
+          format: uuid
+        reviewItemId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+          - IN_PROGRESS
+          - SUBMITTED
+          - ABANDONED
+        startedAt:
+          type: string
+          format: date-time
+        submittedAt:
+          type: string
+          format: date-time
+        answer:
+          $ref: '#/components/schemas/Answer'
+        revealedHints:
+          type: array
+          items:
+            $ref: '#/components/schemas/Hint'
+          maxItems: 5
+        debriefAvailable:
+          type: boolean
+      required:
+      - id
+      - exerciseId
+      - exerciseVersion
+      - status
+      - startedAt
+      - revealedHints
+      - debriefAvailable
+      description: Privé au propriétaire, y compris vis-à-vis des administrateurs dans cette API. answer absent
+        avant soumission. Une seule tentative IN_PROGRESS par utilisateur, exercice et version hors défi. Une seule
+        tentative par participant et défi, non abandonnable.
+    SubmitAnswer:
+      type: object
+      additionalProperties: false
+      properties:
+        answer:
+          $ref: '#/components/schemas/Answer'
+      required:
+      - answer
+    HintRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        level:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 5
+      required:
+      - level
+    Debrief:
+      type: object
+      additionalProperties: false
+      properties:
+        attemptId:
+          type: string
+          format: uuid
+        exerciseVersion:
+          type: integer
+          format: int32
+          minimum: 1
+        correction:
+          $ref: '#/components/schemas/Correction'
+        objectiveResult:
+          type: string
+          enum:
+          - CORRECT
+          - INCORRECT
+          - NOT_AUTO_GRADED
+        usedHintCount:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 5
+        selfAssessment:
+          $ref: '#/components/schemas/SelfAssessment'
+      required:
+      - attemptId
+      - exerciseVersion
+      - correction
+      - objectiveResult
+      - usedHintCount
+      description: 'Résultat déterministe seulement pour les choix : égalité exacte avec l’ensemble attendu. Les
+        réponses libres et revues sont NOT_AUTO_GRADED. Le corrigé est disponible immédiatement après soumission,
+        même sans IA.'
+    SelfAssessment:
+      type: object
+      additionalProperties: false
+      properties:
+        mastery:
+          type: string
+          enum:
+          - AGAIN
+          - HARD
+          - GOOD
+          - EASY
+        note:
+          type: string
+          maxLength: 2000
+      required:
+      - mastery
+      example:
+        mastery: HARD
+        note: Je comprends le corrigé mais veux refaire un cas similaire.
+    ReviewItem:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        exercise:
+          $ref: '#/components/schemas/ExerciseSummary'
+        sourceAttemptId:
+          type: string
+          format: uuid
+        dueAt:
+          type: string
+          format: date-time
+        reason:
+          type: string
+          enum:
+          - INCORRECT
+          - LOW_CONFIDENCE
+          - SELF_ASSESSMENT
+        state:
+          type: string
+          enum:
+          - DUE
+          - SCHEDULED
+          - COMPLETED
+      required:
+      - id
+      - exercise
+      - sourceAttemptId
+      - dueAt
+      - reason
+      - state
+    TopicProgress:
+      type: object
+      additionalProperties: false
+      properties:
+        topicId:
+          type: string
+          format: uuid
+        submittedAttempts:
+          type: integer
+          format: int32
+          minimum: 0
+        correctChoiceAttempts:
+          type: integer
+          format: int32
+          minimum: 0
+        gradedChoiceAttempts:
+          type: integer
+          format: int32
+          minimum: 0
+        lastPracticedAt:
+          type: string
+          format: date-time
+      required:
+      - topicId
+      - submittedAttempts
+      - correctChoiceAttempts
+      - gradedChoiceAttempts
+    Progress:
+      type: object
+      additionalProperties: false
+      properties:
+        submittedAttempts:
+          type: integer
+          format: int32
+          minimum: 0
+        activeDaysLast30Days:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 30
+        dueReviewCount:
+          type: integer
+          format: int32
+          minimum: 0
+        topics:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopicProgress'
+          maxItems: 500
+      required:
+      - submittedAttempts
+      - activeDaysLast30Days
+      - dueReviewCount
+      - topics
+      description: Personnel. Les compteurs de réussite portent seulement sur les choix corrigés automatiquement.
+        Aucune note LLM ni classement des personnes.
+    Dashboard:
+      type: object
+      additionalProperties: false
+      properties:
+        recommendedExercises:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExerciseSummary'
+          maxItems: 3
+        discoveries:
+          type: array
+          items:
+            $ref: '#/components/schemas/ArticleSummary'
+          maxItems: 3
+        dueReviewCount:
+          type: integer
+          format: int32
+          minimum: 0
+        openChallenges:
+          type: array
+          items:
+            $ref: '#/components/schemas/Challenge'
+          maxItems: 10
+        aiAvailable:
+          type: boolean
+      required:
+      - recommendedExercises
+      - discoveries
+      - dueReviewCount
+      - openChallenges
+      - aiAvailable
+      description: Suggestions selon préférences et révisions. Les tableaux peuvent être vides. Les défis retournés
+        sont ceux créés ou déjà rejoints par l’utilisateur.
+    ArticleSummary:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          maxLength: 200
+          minLength: 1
+        summary:
+          type: string
+          maxLength: 2000
+        topicIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+          maxItems: 20
+          uniqueItems: true
+        technologies:
+          type: array
+          items:
+            $ref: '#/components/schemas/TechnologyRequirement'
+          maxItems: 10
+        publishedAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+      - id
+      - title
+      - summary
+      - topicIds
+      - technologies
+      - publishedAt
+      - updatedAt
+    Article:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          maxLength: 200
+          minLength: 1
+        summary:
+          type: string
+          maxLength: 2000
+        topicIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+          maxItems: 20
+          uniqueItems: true
+        technologies:
+          type: array
+          items:
+            $ref: '#/components/schemas/TechnologyRequirement'
+          maxItems: 10
+        publishedAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        bodyMarkdown:
+          type: string
+          maxLength: 20000
+          minLength: 1
+        sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/Source'
+          maxItems: 20
+          minItems: 1
+        relatedExercises:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExerciseSummary'
+          maxItems: 10
+        revision:
+          type: integer
+          format: int32
+          minimum: 1
+      required:
+      - id
+      - title
+      - summary
+      - topicIds
+      - technologies
+      - publishedAt
+      - updatedAt
+      - bodyMarkdown
+      - sources
+      - relatedExercises
+      - revision
+    ExerciseReference:
+      type: object
+      additionalProperties: false
+      properties:
+        exerciseId:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          format: int32
+          minimum: 1
+      required:
+      - exerciseId
+      - version
+    ArticleInput:
+      type: object
+      additionalProperties: false
+      properties:
+        title:
+          type: string
+          maxLength: 200
+          minLength: 1
+        summary:
+          type: string
+          maxLength: 2000
+          minLength: 1
+        topicIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+          maxItems: 20
+          uniqueItems: true
+        technologies:
+          type: array
+          items:
+            $ref: '#/components/schemas/TechnologyRequirement'
+          maxItems: 10
+        bodyMarkdown:
+          type: string
+          maxLength: 20000
+          minLength: 1
+        sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/Source'
+          maxItems: 20
+          minItems: 1
+        relatedExercises:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExerciseReference'
+          maxItems: 10
+      required:
+      - title
+      - summary
+      - topicIds
+      - technologies
+      - bodyMarkdown
+      - sources
+      - relatedExercises
+      description: Fiche rédigée et validée par REVIEWER ou ADMIN. Les exercices liés doivent être publiés. Publication
+        immédiate ; pas d’ingestion automatique dans le MVP.
+    ArticleUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        expectedRevision:
+          type: integer
+          format: int32
+          minimum: 1
+        content:
+          $ref: '#/components/schemas/ArticleInput'
+      required:
+      - expectedRevision
+      - content
+    ChallengeInput:
+      type: object
+      additionalProperties: false
+      properties:
+        title:
+          type: string
+          maxLength: 200
+          minLength: 1
+        exerciseId:
+          type: string
+          format: uuid
+        exerciseVersion:
+          type: integer
+          format: int32
+          minimum: 1
+        closesAt:
+          type: string
+          format: date-time
+      required:
+      - title
+      - exerciseId
+      - exerciseVersion
+      - closesAt
+      description: Échéance strictement future, au maximum dans 30 jours. Défi ouvert immédiatement. Version publiée
+        uniquement. Créateur inscrit automatiquement ; titre/version/échéance immuables.
+    Challenge:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          maxLength: 200
+          minLength: 1
+        exercise:
+          $ref: '#/components/schemas/ExerciseSummary'
+        creatorId:
+          type: string
+          format: uuid
+        closesAt:
+          type: string
+          format: date-time
+        state:
+          type: string
+          enum:
+          - OPEN
+          - CLOSED
+        participantCount:
+          type: integer
+          format: int32
+          minimum: 1
+        responsesUnlocked:
+          type: boolean
+      required:
+      - id
+      - title
+      - exercise
+      - creatorId
+      - closesAt
+      - state
+      - participantCount
+      - responsesUnlocked
+    ChallengeCreated:
+      type: object
+      additionalProperties: false
+      properties:
+        challenge:
+          $ref: '#/components/schemas/Challenge'
+        joinCode:
+          type: string
+          maxLength: 128
+          minLength: 32
+      required:
+      - challenge
+      - joinCode
+      description: Code opaque aléatoire, au moins 128 bits d’entropie. Transmettre dans le fragment du lien frontend
+        puis dans le corps de join. Ne pas journaliser. Rendu uniquement à la création, valable jusqu’à closesAt.
+        Le créateur peut fermer le défi pour le révoquer.
+    JoinChallenge:
+      type: object
+      additionalProperties: false
+      properties:
+        joinCode:
+          type: string
+          maxLength: 128
+          minLength: 32
+      required:
+      - joinCode
+    SharedResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+          maxLength: 200
+          minLength: 1
+        answer:
+          $ref: '#/components/schemas/Answer'
+        submittedAt:
+          type: string
+          format: date-time
+      required:
+      - id
+      - displayName
+      - answer
+      - submittedAt
+      description: id est un identifiant de réponse partagé, pas l’identifiant d’une tentative privée. Soumettre
+        à un défi vaut partage de cette réponse, de la justification et de la confiance avec les participants ayant
+        soumis.
+    DiscussionComment:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        authorDisplayName:
+          type: string
+          maxLength: 200
+          minLength: 1
+        body:
+          type: string
+          maxLength: 4000
+          minLength: 1
+        createdAt:
+          type: string
+          format: date-time
+      required:
+      - id
+      - authorDisplayName
+      - body
+      - createdAt
+    CommentInput:
+      type: object
+      additionalProperties: false
+      properties:
+        body:
+          type: string
+          maxLength: 4000
+          minLength: 1
+      required:
+      - body
+    TutorQuestion:
+      type: object
+      additionalProperties: false
+      properties:
+        question:
+          type: string
+          maxLength: 4000
+          minLength: 1
+      required:
+      - question
+    TutorExchange:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        question:
+          type: string
+          maxLength: 4000
+        answerMarkdown:
+          type: string
+          maxLength: 20000
+          minLength: 1
+        sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/Source'
+          maxItems: 20
+        createdAt:
+          type: string
+          format: date-time
+        generatedByAi:
+          type: boolean
+          enum:
+          - true
+      required:
+      - id
+      - question
+      - answerMarkdown
+      - sources
+      - createdAt
+      - generatedByAi
+      description: Explication indicative générée par IA, ne modifie ni le corrigé validé ni le résultat objectif.
+        Sources limitées aux références de l’exercice ; tableau vide si aucune citation vérifiable.
+    TopicPage:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Topic'
+          maxItems: 100
+        nextCursor:
+          type: string
+          maxLength: 1000
+      required:
+      - items
+      description: Pagination par curseur opaque ; nextCursor absent à la dernière page. Aucun total garanti. Un
+        curseur doit être réutilisé avec les mêmes filtres.
+    ExercisePage:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExerciseSummary'
+          maxItems: 100
+        nextCursor:
+          type: string
+          maxLength: 1000
+      required:
+      - items
+      description: Pagination par curseur opaque ; nextCursor absent à la dernière page. Aucun total garanti. Un
+        curseur doit être réutilisé avec les mêmes filtres.
+    AttemptPage:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Attempt'
+          maxItems: 100
+        nextCursor:
+          type: string
+          maxLength: 1000
+      required:
+      - items
+      description: Pagination par curseur opaque ; nextCursor absent à la dernière page. Aucun total garanti. Un
+        curseur doit être réutilisé avec les mêmes filtres.
+    ReviewPage:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReviewItem'
+          maxItems: 100
+        nextCursor:
+          type: string
+          maxLength: 1000
+      required:
+      - items
+      description: Pagination par curseur opaque ; nextCursor absent à la dernière page. Aucun total garanti. Un
+        curseur doit être réutilisé avec les mêmes filtres.
+    ArticlePage:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ArticleSummary'
+          maxItems: 100
+        nextCursor:
+          type: string
+          maxLength: 1000
+      required:
+      - items
+      description: Pagination par curseur opaque ; nextCursor absent à la dernière page. Aucun total garanti. Un
+        curseur doit être réutilisé avec les mêmes filtres.
+    DraftPage:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Draft'
+          maxItems: 100
+        nextCursor:
+          type: string
+          maxLength: 1000
+      required:
+      - items
+      description: Pagination par curseur opaque ; nextCursor absent à la dernière page. Aucun total garanti. Un
+        curseur doit être réutilisé avec les mêmes filtres.
+    ChallengePage:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Challenge'
+          maxItems: 100
+        nextCursor:
+          type: string
+          maxLength: 1000
+      required:
+      - items
+      description: Pagination par curseur opaque ; nextCursor absent à la dernière page. Aucun total garanti. Un
+        curseur doit être réutilisé avec les mêmes filtres.
+    SharedResponsePage:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SharedResponse'
+          maxItems: 100
+        nextCursor:
+          type: string
+          maxLength: 1000
+      required:
+      - items
+      description: Pagination par curseur opaque ; nextCursor absent à la dernière page. Aucun total garanti. Un
+        curseur doit être réutilisé avec les mêmes filtres.
+    CommentPage:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DiscussionComment'
+          maxItems: 100
+        nextCursor:
+          type: string
+          maxLength: 1000
+      required:
+      - items
+      description: Pagination par curseur opaque ; nextCursor absent à la dernière page. Aucun total garanti. Un
+        curseur doit être réutilisé avec les mêmes filtres.
+    TutorPage:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TutorExchange'
+          maxItems: 100
+        nextCursor:
+          type: string
+          maxLength: 1000
+      required:
+      - items
+      description: Pagination par curseur opaque ; nextCursor absent à la dernière page. Aucun total garanti. Un
+        curseur doit être réutilisé avec les mêmes filtres.
+externalDocs:
+  description: Spécification normative OpenAPI 3.0.3
+  url: https://spec.openapis.org/oas/v3.0.3.html

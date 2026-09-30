@@ -1,0 +1,107 @@
+spring:
+  application:
+    name: La Forge
+
+  datasource:
+    url: jdbc:postgresql://${LAFORGE_DB_HOST:localhost}:${LAFORGE_DB_PORT:5432}/${LAFORGE_DB_NAME:laforge}
+    username: ${LAFORGE_DB_USER:laforge}
+    password: ${LAFORGE_DB_PASSWORD:laforge}
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+        format_sql: false
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+
+  mail:
+    host: ${LAFORGE_MAIL_HOST:localhost}
+    port: ${LAFORGE_MAIL_PORT:25}
+    protocol: smtp
+
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
+    default-property-inclusion: non_null
+    time-zone: UTC
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+
+server:
+  servlet:
+    context-path: /api/v1
+
+laforge:
+  security:
+    jwt:
+      issuer: la-forge
+      audience: la-forge-api
+      access-token-ttl: PT15M
+      # Chemins optionnels vers une paire de clés RSA (PEM). En leur absence, une paire est
+      # générée en mémoire au démarrage (adapté au développement, pas à un cluster de production).
+      private-key-location: ${LAFORGE_JWT_PRIVATE_KEY:}
+      public-key-location: ${LAFORGE_JWT_PUBLIC_KEY:}
+    refresh-token:
+      ttl: P30D
+    verification-token:
+      ttl: PT24H
+      resend-cooldown: PT2M
+  mail:
+    from: ${LAFORGE_MAIL_FROM:no-reply@la-forge.local}
+    verification-base-url: ${LAFORGE_VERIFICATION_BASE_URL:http://localhost:4200/verify-account}
+  rate-limit:
+    auth:
+      capacity: 10
+      refill-period: PT1M
+    tutor:
+      capacity: 20
+      refill-period: PT1H
+  http:
+    max-request-body-size: 2MB
+
+---
+spring:
+  config:
+    activate:
+      on-profile: dev
+  flyway:
+    clean-disabled: false
+    locations: classpath:db/migration,classpath:db/dev-seed
+
+logging:
+  level:
+    ch.admin.zas.jweb.laforge: DEBUG
+
+---
+spring:
+  config:
+    activate:
+      on-profile: test
+  datasource:
+    url: jdbc:h2:mem:laforge;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
+    username: sa
+    password: ""
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+  flyway:
+    enabled: false
+  mail:
+    host: localhost
+    port: 3025

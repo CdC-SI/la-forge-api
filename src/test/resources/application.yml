@@ -1,0 +1,60 @@
+spring:
+  application:
+    name: La Forge
+
+  datasource:
+    url: jdbc:h2:mem:laforge-test;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;INIT=CREATE DOMAIN IF NOT EXISTS JSONB AS VARCHAR
+    username: sa
+    password: ""
+    driver-class-name: org.h2.Driver
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: create-drop
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+
+  flyway:
+    enabled: false
+
+  mail:
+    host: localhost
+    port: 3025
+
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
+    time-zone: UTC
+
+server:
+  servlet:
+    context-path: /api/v1
+
+laforge:
+  security:
+    jwt:
+      issuer: la-forge
+      audience: la-forge-api
+      access-token-ttl: PT15M
+      private-key-location: ""
+      public-key-location: ""
+    refresh-token:
+      ttl: P30D
+    verification-token:
+      ttl: PT24H
+      resend-cooldown: PT2M
+  mail:
+    from: no-reply@la-forge.local
+    verification-base-url: http://localhost:4200/verify-account
+  rate-limit:
+    auth:
+      capacity: 10
+      refill-period: PT1M
+    tutor:
+      capacity: 20
+      refill-period: PT1H
+  http:
+    max-request-body-size: 2MB
