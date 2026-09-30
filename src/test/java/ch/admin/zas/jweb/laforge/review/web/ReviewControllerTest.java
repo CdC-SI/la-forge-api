@@ -13,6 +13,7 @@ import ch.admin.zas.jweb.laforge.common.web.SecurityHeadersFilter;
 import ch.admin.zas.jweb.laforge.review.service.ReviewService;
 import ch.admin.zas.jweb.laforge.security.config.SecurityConfig;
 import ch.admin.zas.jweb.laforge.security.domain.Account;
+import ch.admin.zas.jweb.laforge.security.dto.CurrentAccountDto;
 import ch.admin.zas.jweb.laforge.security.repository.AccountRepository;
 import java.util.List;
 import java.util.Optional;
@@ -51,7 +52,7 @@ class ReviewControllerTest {
     void listMyReviews_success_returnsEmptyPage() throws Exception {
         when(accountRepository.findById(ACCOUNT_ID))
                 .thenReturn(Optional.of(org.mockito.Mockito.mock(Account.class)));
-        when(reviewService.listMyReviews(any(Account.class), any(), any())).thenReturn(Page.last(List.of()));
+        when(reviewService.listMyReviews(any(CurrentAccountDto.class), any(), any())).thenReturn(Page.last(List.of()));
 
         mockMvc.perform(get("/me/reviews").with(jwt().jwt(builder -> builder.subject(ACCOUNT_ID.toString()))))
                 .andExpect(status().isOk())

@@ -20,6 +20,7 @@ import jakarta.persistence.UniqueConstraint;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import org.hibernate.annotations.ColumnTransformer;
 
 /**
  * Préférences de pratique d'un compte (schéma {@code Preferences}). Créées paresseusement à la
@@ -38,6 +39,7 @@ public class Preferences extends BaseEntity {
     private Account account;
 
     @Convert(converter = StackEntriesConverter.class)
+    @ColumnTransformer(write = "cast(? as jsonb)")
     @Column(name = "stack", columnDefinition = "jsonb")
     private List<StackEntryDto> stack;
 

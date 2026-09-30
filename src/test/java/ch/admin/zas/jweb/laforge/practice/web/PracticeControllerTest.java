@@ -19,6 +19,7 @@ import ch.admin.zas.jweb.laforge.practice.domain.FreeTextAnswer;
 import ch.admin.zas.jweb.laforge.practice.service.PracticeService;
 import ch.admin.zas.jweb.laforge.security.config.SecurityConfig;
 import ch.admin.zas.jweb.laforge.security.domain.Account;
+import ch.admin.zas.jweb.laforge.security.dto.CurrentAccountDto;
 import ch.admin.zas.jweb.laforge.security.repository.AccountRepository;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -67,7 +68,7 @@ class PracticeControllerTest {
         var dto = new AttemptDto(
                 UUID.randomUUID(), exerciseId, 1, null, null, AttemptStatus.IN_PROGRESS,
                 OffsetDateTime.now(), null, null, List.of(), false);
-        when(practiceService.createAttempt(any(Account.class), any())).thenReturn(dto);
+        when(practiceService.createAttempt(any(CurrentAccountDto.class), any())).thenReturn(dto);
 
         var body = """
                 {"exerciseId":"%s","exerciseVersion":1}
@@ -98,7 +99,7 @@ class PracticeControllerTest {
     @Test
     void submitAttempt_notFound_returnsProblem() throws Exception {
         var attemptId = UUID.randomUUID();
-        when(practiceService.submitAttempt(any(Account.class), eq(attemptId), any()))
+        when(practiceService.submitAttempt(any(CurrentAccountDto.class), eq(attemptId), any()))
                 .thenThrow(new NotFoundException("Tentative introuvable."));
 
         var body = """

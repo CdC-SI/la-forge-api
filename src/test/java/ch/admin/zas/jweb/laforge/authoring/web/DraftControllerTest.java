@@ -22,6 +22,7 @@ import ch.admin.zas.jweb.laforge.common.web.MaxRequestBodySizeFilter;
 import ch.admin.zas.jweb.laforge.common.web.SecurityHeadersFilter;
 import ch.admin.zas.jweb.laforge.security.config.SecurityConfig;
 import ch.admin.zas.jweb.laforge.security.domain.Account;
+import ch.admin.zas.jweb.laforge.security.dto.CurrentAccountDto;
 import ch.admin.zas.jweb.laforge.security.repository.AccountRepository;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -80,7 +81,7 @@ class DraftControllerTest {
         var draft = new DraftDto(
                 draftId, UUID.randomUUID(), ACCOUNT_ID, DraftState.DRAFT, 3, 1, content, List.of(), null,
                 OffsetDateTime.now());
-        when(authoringService.getDraft(any(Account.class), eq(draftId))).thenReturn(draft);
+        when(authoringService.getDraft(any(CurrentAccountDto.class), eq(draftId))).thenReturn(draft);
 
         mockMvc.perform(get("/authoring/drafts/{id}", draftId).with(authenticated()))
                 .andExpect(status().isOk())
@@ -90,7 +91,7 @@ class DraftControllerTest {
     @Test
     void getDraft_notFound_returnsProblem() throws Exception {
         var draftId = UUID.randomUUID();
-        when(authoringService.getDraft(any(Account.class), eq(draftId)))
+        when(authoringService.getDraft(any(CurrentAccountDto.class), eq(draftId)))
                 .thenThrow(new NotFoundException("Brouillon introuvable."));
 
         mockMvc.perform(get("/authoring/drafts/{id}", draftId).with(authenticated()))

@@ -13,6 +13,7 @@ import ch.admin.zas.jweb.laforge.security.service.RegistrationService;
 import ch.admin.zas.jweb.laforge.security.service.TokenIssuer;
 import ch.admin.zas.jweb.laforge.security.config.SecurityConfig;
 import ch.admin.zas.jweb.laforge.security.domain.Account;
+import ch.admin.zas.jweb.laforge.security.dto.CurrentAccountDto;
 import ch.admin.zas.jweb.laforge.common.ratelimit.RateLimited;
 import ch.admin.zas.jweb.laforge.common.ratelimit.RateLimitFamily;
 import ch.admin.zas.jweb.laforge.profile.dto.UserDto;
@@ -68,7 +69,7 @@ public class AuthController {
     @RateLimited(RateLimitFamily.AUTH)
     public UserDto verifyAccount(@Valid @RequestBody VerificationInput input) {
         var account = accountVerificationService.verify(input.token());
-        return profileService.getMe(account);
+        return profileService.getMe(CurrentAccountDto.from(account));
     }
 
     @PostMapping("/verifications/resend")
@@ -106,6 +107,9 @@ public class AuthController {
     private SessionResponse session(Account account, String refreshToken) {
         var accessToken = tokenIssuer.issueAccessToken(account);
         return SessionResponse.bearer(
-                accessToken, refreshToken, tokenIssuer.accessTokenTtl().toSeconds(), profileService.getMe(account));
+                accessToken,
+                refreshToken,
+                tokenIssuer.accessTokenTtl().toSeconds(),
+                profileService.getMe(CurrentAccountDto.from(account)));
     }
 }

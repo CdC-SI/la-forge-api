@@ -7,6 +7,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -17,8 +18,10 @@ import ch.admin.zas.jweb.laforge.catalog.domain.ResponseSpec;
 import ch.admin.zas.jweb.laforge.catalog.dto.ExerciseDto;
 import ch.admin.zas.jweb.laforge.catalog.dto.ExerciseSummaryDto;
 import ch.admin.zas.jweb.laforge.catalog.dto.TopicDto;
+import ch.admin.zas.jweb.laforge.catalog.dto.TopicInput;
 import ch.admin.zas.jweb.laforge.catalog.service.CatalogService;
 import ch.admin.zas.jweb.laforge.common.domain.Difficulty;
+import ch.admin.zas.jweb.laforge.common.error.InvalidStateException;
 import ch.admin.zas.jweb.laforge.common.error.NotFoundException;
 import ch.admin.zas.jweb.laforge.common.page.Page;
 import ch.admin.zas.jweb.laforge.common.page.PageQuery;
@@ -36,6 +39,7 @@ import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.FilterType;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -87,6 +91,75 @@ class CatalogControllerTest {
         mockMvc.perform(get("/topics"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON));
+    }
+
+    @Test
+    void createTopic_asAuthor_returns201() throws Exception {
+        var id = UUID.randomUUID();
+        when(catalogService.createTopic(any(TopicInput.class))).thenReturn(new TopicDto(id, "java-records", "Records Java"));
+
+        mockMvc.perform(post("/topics")
+                        .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_AUTHOR")))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"slug":"java-records","label":"Records Java"}
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").value(id.toString()))
+                .andExpect(jsonPath("$.slug").value("java-records"));
+
+        verify(catalogService).createTopic(new TopicInput("java-records", "Records Java"));
+    }
+
+    @Test
+    void createTopic_withId_isRejectedAsUnknownProperty() throws Exception {
+        mockMvc.perform(post("/topics")
+                        .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ADMIN")))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"id":"%s","slug":"java","label":"Java"}
+                                """.formatted(UUID.randomUUID())))
+                .andExpect(status().is4xxClientError())
+                .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON));
+    }
+
+    @Test
+    void createTopic_asLearner_isForbidden() throws Exception {
+        mockMvc.perform(post("/topics")
+                        .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_LEARNER")))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"slug":"java","label":"Java"}
+                                """))
+                .andExpect(status().isForbidden())
+                .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON));
+    }
+
+    @Test
+    void createTopic_invalidSlug_isUnprocessable() throws Exception {
+        mockMvc.perform(post("/topics")
+                        .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_AUTHOR")))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"slug":"Java Records","label":"Records"}
+                                """))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON));
+    }
+
+    @Test
+    void createTopic_conflict_returns409() throws Exception {
+        when(catalogService.createTopic(any(TopicInput.class)))
+                .thenThrow(new InvalidStateException("Un thème existe déjà avec ce slug."));
+
+        mockMvc.perform(post("/topics")
+                        .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_AUTHOR")))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"slug":"java","label":"Java"}
+                                """))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("INVALID_STATE"));
     }
 
     @Test

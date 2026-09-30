@@ -12,6 +12,7 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import java.util.List;
 import java.util.Objects;
+import org.hibernate.annotations.ColumnTransformer;
 
 /**
  * Échange ponctuel avec le tuteur assisté par IA, à propos d'une tentative déjà soumise. Persisté
@@ -33,6 +34,7 @@ public class TutorExchange extends BaseEntity {
     private String answerMarkdown;
 
     @Convert(converter = TutorSourcesConverter.class)
+    @ColumnTransformer(write = "cast(? as jsonb)")
     @Column(name = "sources", columnDefinition = "jsonb")
     private List<Source> sources;
 

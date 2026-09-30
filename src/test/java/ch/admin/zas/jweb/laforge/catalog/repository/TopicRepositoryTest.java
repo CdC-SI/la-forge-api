@@ -43,4 +43,12 @@ class TopicRepositoryTest {
         org.junit.jupiter.api.Assertions.assertThrows(
                 org.springframework.dao.DataIntegrityViolationException.class, () -> topicRepository.saveAndFlush(duplicate));
     }
+
+    @Test
+    void existsBySlug_detecteUnSlugDejaUtilise() {
+        topicRepository.saveAndFlush(new Topic("java-records", "Records Java"));
+
+        assertThat(topicRepository.existsBySlug("java-records")).isTrue();
+        assertThat(topicRepository.existsBySlug("inconnu")).isFalse();
+    }
 }

@@ -26,7 +26,8 @@ import ch.admin.zas.jweb.laforge.common.security.SecureTokenFactory;
 import ch.admin.zas.jweb.laforge.practice.domain.Attempt;
 import ch.admin.zas.jweb.laforge.practice.domain.AttemptStatus;
 import ch.admin.zas.jweb.laforge.practice.repository.AttemptRepository;
-import ch.admin.zas.jweb.laforge.security.domain.Account;
+import ch.admin.zas.jweb.laforge.security.dto.CurrentAccountDto;
+import ch.admin.zas.jweb.laforge.security.repository.AccountRepository;
 import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -52,6 +53,7 @@ public class CollectiveService {
     private final ExerciseVersionRepository exerciseVersionRepository;
     private final AttemptRepository attemptRepository;
     private final DiscussionCommentRepository discussionCommentRepository;
+    private final AccountRepository accountRepository;
     private final SecureTokenFactory secureTokenFactory;
     private final Clock clock;
 
@@ -61,6 +63,7 @@ public class CollectiveService {
             ExerciseVersionRepository exerciseVersionRepository,
             AttemptRepository attemptRepository,
             DiscussionCommentRepository discussionCommentRepository,
+            AccountRepository accountRepository,
             SecureTokenFactory secureTokenFactory,
             Clock clock) {
         this.challengeRepository = challengeRepository;
@@ -68,6 +71,7 @@ public class CollectiveService {
         this.exerciseVersionRepository = exerciseVersionRepository;
         this.attemptRepository = attemptRepository;
         this.discussionCommentRepository = discussionCommentRepository;
+        this.accountRepository = accountRepository;
         this.secureTokenFactory = secureTokenFactory;
         this.clock = clock;
     }
@@ -79,7 +83,7 @@ public class CollectiveService {
      * @throws NotFoundException  si l'exercice/version n'existe pas ou n'est pas publié
      */
     @Transactional
-    public ChallengeCreatedDto createChallenge(Account creator, ChallengeInput input) {
+    public ChallengeCreatedDto createChallenge(CurrentAccountDto currentAccount, ChallengeInput input) {
         var now = OffsetDateTime.now(clock);
         if (!input.closesAt().isAfter(now) || input.closesAt().isAfter(now.plusDays(MAX_CLOSES_AT_DAYS))) {
             throw new BadRequestException("L'échéance doit être strictement future et au maximum dans 30 jours.");
@@ -90,15 +94,16 @@ public class CollectiveService {
                 .orElseThrow(() -> new NotFoundException("Cette version d'exercice n'existe pas ou n'est pas publiée."));
 
         var joinCode = secureTokenFactory.generateOpaqueToken();
+        var creator = accountRepository.getReferenceById(currentAccount.id());
         var challenge = new Challenge(input.title(), version, creator, input.closesAt(), secureTokenFactory.hash(joinCode));
         challenge = challengeRepository.save(challenge);
         challengeParticipantRepository.save(new ChallengeParticipant(challenge, creator, now));
 
-        return new ChallengeCreatedDto(toDto(challenge, creator), joinCode);
+        return new ChallengeCreatedDto(toDto(challenge, currentAccount), joinCode);
     }
 
     /** Défis créés ou rejoints par l'appelant, triés par {@code closesAt} décroissant puis id. */
-    public Page<ChallengeDto> listMyChallenges(Account account, PageQuery pageQuery) {
+    public Page<ChallengeDto> listMyChallenges(CurrentAccountDto account, PageQuery pageQuery) {
         var fingerprint = CursorCodec.fingerprint(java.util.Map.of());
         OffsetDateTime afterClosesAt = null;
         UUID afterId = null;
@@ -113,8 +118,8 @@ public class CollectiveService {
             var participantRoot = participantSubquery.from(ChallengeParticipant.class);
             participantSubquery
                     .select(participantRoot.get("challenge").get("id"))
-                    .where(cb.equal(participantRoot.get("account").get("id"), account.getId()));
-            return cb.or(cb.equal(root.get("creator").get("id"), account.getId()), root.get("id").in(participantSubquery));
+                    .where(cb.equal(participantRoot.get("account").get("id"), account.id()));
+            return cb.or(cb.equal(root.get("creator").get("id"), account.id()), root.get("id").in(participantSubquery));
         };
         spec = spec.and(KeysetPredicates.afterDescending("closesAt", afterClosesAt, afterId));
 
@@ -140,11 +145,11 @@ public class CollectiveService {
      *                                version hors défi interdit d'y participer
      */
     @Transactional
-    public ChallengeDto joinChallenge(Account account, String joinCode) {
+    public ChallengeDto joinChallenge(CurrentAccountDto account, String joinCode) {
         var challenge = challengeRepository.findByJoinCodeHash(secureTokenFactory.hash(joinCode))
                 .orElseThrow(() -> new NotFoundException("Code d'invitation invalide."));
 
-        var existing = challengeParticipantRepository.findByChallenge_IdAndAccount_Id(challenge.getId(), account.getId());
+        var existing = challengeParticipantRepository.findByChallenge_IdAndAccount_Id(challenge.getId(), account.id());
         if (existing.isPresent()) {
             return toDto(challenge, account);
         }
@@ -153,17 +158,18 @@ public class CollectiveService {
         }
         var versionId = challenge.getExerciseVersion().getId();
         if (attemptRepository.existsByLearner_IdAndExerciseVersion_IdAndStatus(
-                account.getId(), versionId, AttemptStatus.SUBMITTED)
-                || attemptRepository.existsRevealedHintOutsideChallenge(account.getId(), versionId, challenge.getId())) {
+                account.id(), versionId, AttemptStatus.SUBMITTED)
+                || attemptRepository.existsRevealedHintOutsideChallenge(account.id(), versionId, challenge.getId())) {
             throw new InvalidStateException(
                     "Une pratique antérieure de cette version hors de ce défi interdit d'y participer.");
         }
-        challengeParticipantRepository.save(new ChallengeParticipant(challenge, account, OffsetDateTime.now(clock)));
+        challengeParticipantRepository.save(new ChallengeParticipant(
+                challenge, accountRepository.getReferenceById(account.id()), OffsetDateTime.now(clock)));
         return toDto(challenge, account);
     }
 
     /** @throws NotFoundException si le défi n'existe pas ou si l'appelant n'y participe pas */
-    public ChallengeDto getChallenge(Account account, UUID challengeId) {
+    public ChallengeDto getChallenge(CurrentAccountDto account, UUID challengeId) {
         var challenge = findChallengeAsParticipant(account, challengeId);
         return toDto(challenge, account);
     }
@@ -175,10 +181,10 @@ public class CollectiveService {
      * @throws ForbiddenException si l'appelant n'est pas le créateur
      */
     @Transactional
-    public ChallengeDto closeChallenge(Account account, UUID challengeId) {
+    public ChallengeDto closeChallenge(CurrentAccountDto account, UUID challengeId) {
         var challenge = challengeRepository.findById(challengeId)
                 .orElseThrow(() -> new NotFoundException("Défi introuvable."));
-        if (!challenge.getCreator().getId().equals(account.getId())) {
+        if (!challenge.getCreator().getId().equals(account.id())) {
             throw new ForbiddenException("Seul le créateur peut fermer ce défi.");
         }
         challenge.close();
@@ -191,7 +197,7 @@ public class CollectiveService {
      * @throws NotFoundException  si le défi n'existe pas ou si l'appelant n'y participe pas
      * @throws ForbiddenException si l'appelant n'a pas encore soumis dans ce défi
      */
-    public Page<SharedResponseDto> listSharedResponses(Account account, UUID challengeId, PageQuery pageQuery) {
+    public Page<SharedResponseDto> listSharedResponses(CurrentAccountDto account, UUID challengeId, PageQuery pageQuery) {
         findChallengeAsParticipant(account, challengeId);
         requireSubmitted(account, challengeId);
 
@@ -215,7 +221,7 @@ public class CollectiveService {
      * @throws NotFoundException  si le défi n'existe pas ou si l'appelant n'y participe pas
      * @throws ForbiddenException si l'appelant n'a pas encore soumis dans ce défi
      */
-    public Page<DiscussionCommentDto> listChallengeComments(Account account, UUID challengeId, PageQuery pageQuery) {
+    public Page<DiscussionCommentDto> listChallengeComments(CurrentAccountDto account, UUID challengeId, PageQuery pageQuery) {
         findChallengeAsParticipant(account, challengeId);
         requireSubmitted(account, challengeId);
 
@@ -251,24 +257,25 @@ public class CollectiveService {
      * @throws ForbiddenException si l'appelant n'a pas encore soumis dans ce défi
      */
     @Transactional
-    public DiscussionCommentDto createChallengeComment(Account account, UUID challengeId, String body) {
+    public DiscussionCommentDto createChallengeComment(CurrentAccountDto account, UUID challengeId, String body) {
         var challenge = findChallengeAsParticipant(account, challengeId);
         requireSubmitted(account, challengeId);
-        var comment = discussionCommentRepository.save(new DiscussionComment(challenge, account, body));
+        var comment = discussionCommentRepository.save(
+                new DiscussionComment(challenge, accountRepository.getReferenceById(account.id()), body));
         return DiscussionCommentDto.from(comment);
     }
 
-    private Challenge findChallengeAsParticipant(Account account, UUID challengeId) {
+    private Challenge findChallengeAsParticipant(CurrentAccountDto account, UUID challengeId) {
         var challenge = challengeRepository.findById(challengeId)
                 .orElseThrow(() -> new NotFoundException("Défi introuvable."));
         challengeParticipantRepository
-                .findByChallenge_IdAndAccount_Id(challengeId, account.getId())
+                .findByChallenge_IdAndAccount_Id(challengeId, account.id())
                 .orElseThrow(() -> new NotFoundException("Défi introuvable."));
         return challenge;
     }
 
-    private void requireSubmitted(Account account, UUID challengeId) {
-        var submitted = attemptRepository.findByChallengeIdAndLearner_Id(challengeId, account.getId())
+    private void requireSubmitted(CurrentAccountDto account, UUID challengeId) {
+        var submitted = attemptRepository.findByChallengeIdAndLearner_Id(challengeId, account.id())
                 .filter(attempt -> attempt.getStatus() == AttemptStatus.SUBMITTED)
                 .isPresent();
         if (!submitted) {
@@ -276,10 +283,10 @@ public class CollectiveService {
         }
     }
 
-    private ChallengeDto toDto(Challenge challenge, Account account) {
+    private ChallengeDto toDto(Challenge challenge, CurrentAccountDto account) {
         var participantCount = (int) challengeParticipantRepository.countByChallenge_Id(challenge.getId());
         var responsesUnlocked = attemptRepository
-                .findByChallengeIdAndLearner_Id(challenge.getId(), account.getId())
+                .findByChallengeIdAndLearner_Id(challenge.getId(), account.id())
                 .filter(attempt -> attempt.getStatus() == AttemptStatus.SUBMITTED)
                 .isPresent();
         return ChallengeDto.from(challenge, participantCount, responsesUnlocked);

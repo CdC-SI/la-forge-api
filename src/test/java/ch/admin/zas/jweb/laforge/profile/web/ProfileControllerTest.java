@@ -16,6 +16,7 @@ import ch.admin.zas.jweb.laforge.profile.dto.UserDto;
 import ch.admin.zas.jweb.laforge.profile.service.ProfileService;
 import ch.admin.zas.jweb.laforge.security.config.SecurityConfig;
 import ch.admin.zas.jweb.laforge.security.domain.Account;
+import ch.admin.zas.jweb.laforge.security.dto.CurrentAccountDto;
 import ch.admin.zas.jweb.laforge.security.domain.Role;
 import ch.admin.zas.jweb.laforge.security.repository.AccountRepository;
 import java.util.Optional;
@@ -64,7 +65,7 @@ class ProfileControllerTest {
     void getMe_success() throws Exception {
         stubAccount();
         var dto = new UserDto(ACCOUNT_ID, "Ada", Set.of(Role.LEARNER), PreferencesDto.defaultPreferences());
-        when(profileService.getMe(any(Account.class))).thenReturn(dto);
+        when(profileService.getMe(any(CurrentAccountDto.class))).thenReturn(dto);
 
         mockMvc.perform(get("/me").with(jwt().jwt(builder -> builder.subject(ACCOUNT_ID.toString()))))
                 .andExpect(status().isOk())

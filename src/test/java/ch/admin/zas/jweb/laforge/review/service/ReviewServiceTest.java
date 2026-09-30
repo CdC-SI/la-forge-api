@@ -7,6 +7,7 @@ import static org.mockito.Mockito.when;
 import ch.admin.zas.jweb.laforge.common.page.PageQuery;
 import ch.admin.zas.jweb.laforge.review.repository.ReviewItemRepository;
 import ch.admin.zas.jweb.laforge.security.domain.Account;
+import ch.admin.zas.jweb.laforge.security.dto.CurrentAccountDto;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -49,7 +50,7 @@ class ReviewServiceTest {
         when(reviewItemRepository.findAll(any(Specification.class), any(PageRequest.class)))
                 .thenReturn(new PageImpl<>(java.util.List.of()));
 
-        var page = newService().listMyReviews(newLearner(), new PageQuery(20, null), null);
+        var page = newService().listMyReviews(CurrentAccountDto.from(newLearner()), new PageQuery(20, null), null);
 
         assertThat(page.items()).isEmpty();
         assertThat(page.nextCursor()).isNull();
@@ -60,7 +61,10 @@ class ReviewServiceTest {
         when(reviewItemRepository.findAll(any(Specification.class), any(PageRequest.class)))
                 .thenReturn(new PageImpl<>(java.util.List.of()));
 
-        var page = newService().listMyReviews(newLearner(), new PageQuery(20, null), ch.admin.zas.jweb.laforge.review.domain.ReviewState.SCHEDULED);
+        var page = newService().listMyReviews(
+                CurrentAccountDto.from(newLearner()),
+                new PageQuery(20, null),
+                ch.admin.zas.jweb.laforge.review.domain.ReviewState.SCHEDULED);
 
         assertThat(page.items()).isEmpty();
         assertThat(page.nextCursor()).isNull();

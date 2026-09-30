@@ -19,6 +19,7 @@ import ch.admin.zas.jweb.laforge.common.web.MaxRequestBodySizeFilter;
 import ch.admin.zas.jweb.laforge.common.web.SecurityHeadersFilter;
 import ch.admin.zas.jweb.laforge.security.config.SecurityConfig;
 import ch.admin.zas.jweb.laforge.security.domain.Account;
+import ch.admin.zas.jweb.laforge.security.dto.CurrentAccountDto;
 import ch.admin.zas.jweb.laforge.security.repository.AccountRepository;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -69,7 +70,7 @@ class CollectiveControllerTest {
         var challenge = new ChallengeDto(
                 UUID.randomUUID(), "Défi", exerciseSummary, ACCOUNT_ID, OffsetDateTime.now().plusDays(1),
                 ChallengeState.OPEN, 1, false);
-        when(collectiveService.createChallenge(any(Account.class), any()))
+        when(collectiveService.createChallenge(any(CurrentAccountDto.class), any()))
                 .thenReturn(new ChallengeCreatedDto(challenge, "abcdefghijklmnopqrstuvwxyzabcdef"));
 
         var body = """

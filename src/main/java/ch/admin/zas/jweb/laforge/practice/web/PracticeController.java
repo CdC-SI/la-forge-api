@@ -13,7 +13,7 @@ import ch.admin.zas.jweb.laforge.practice.dto.SelfAssessmentInput;
 import ch.admin.zas.jweb.laforge.practice.dto.SubmitAnswerInput;
 import ch.admin.zas.jweb.laforge.practice.service.PracticeService;
 import ch.admin.zas.jweb.laforge.review.dto.ReviewItemDto;
-import ch.admin.zas.jweb.laforge.security.domain.Account;
+import ch.admin.zas.jweb.laforge.security.dto.CurrentAccountDto;
 import ch.admin.zas.jweb.laforge.security.web.CurrentAccount;
 import jakarta.validation.Valid;
 import java.util.UUID;
@@ -40,13 +40,13 @@ public class PracticeController {
     @PostMapping("/attempts")
     @ResponseStatus(HttpStatus.CREATED)
     @Idempotent
-    public AttemptDto createAttempt(@CurrentAccount Account account, @Valid @RequestBody CreateAttemptInput input) {
+    public AttemptDto createAttempt(@CurrentAccount CurrentAccountDto account, @Valid @RequestBody CreateAttemptInput input) {
         return practiceService.createAttempt(account, input);
     }
 
     @GetMapping("/me/attempts")
     public Page<AttemptDto> listMyAttempts(
-            @CurrentAccount Account account,
+            @CurrentAccount CurrentAccountDto account,
             @RequestParam(required = false) Integer limit,
             @RequestParam(required = false) String cursor,
             @RequestParam(required = false) AttemptStatus status) {
@@ -54,35 +54,35 @@ public class PracticeController {
     }
 
     @GetMapping("/attempts/{attemptId}")
-    public AttemptDto getAttempt(@CurrentAccount Account account, @PathVariable UUID attemptId) {
+    public AttemptDto getAttempt(@CurrentAccount CurrentAccountDto account, @PathVariable UUID attemptId) {
         return practiceService.getAttempt(account, attemptId);
     }
 
     @PutMapping("/attempts/{attemptId}/submission")
     public AttemptDto submitAttempt(
-            @CurrentAccount Account account, @PathVariable UUID attemptId, @Valid @RequestBody SubmitAnswerInput input) {
+            @CurrentAccount CurrentAccountDto account, @PathVariable UUID attemptId, @Valid @RequestBody SubmitAnswerInput input) {
         return practiceService.submitAttempt(account, attemptId, input.answer());
     }
 
     @PostMapping("/attempts/{attemptId}/abandon")
-    public AttemptDto abandonAttempt(@CurrentAccount Account account, @PathVariable UUID attemptId) {
+    public AttemptDto abandonAttempt(@CurrentAccount CurrentAccountDto account, @PathVariable UUID attemptId) {
         return practiceService.abandonAttempt(account, attemptId);
     }
 
     @PostMapping("/attempts/{attemptId}/hints")
     public Hint revealHint(
-            @CurrentAccount Account account, @PathVariable UUID attemptId, @Valid @RequestBody HintRequestInput input) {
+            @CurrentAccount CurrentAccountDto account, @PathVariable UUID attemptId, @Valid @RequestBody HintRequestInput input) {
         return practiceService.revealHint(account, attemptId, input.level());
     }
 
     @GetMapping("/attempts/{attemptId}/debrief")
-    public DebriefDto getDebrief(@CurrentAccount Account account, @PathVariable UUID attemptId) {
+    public DebriefDto getDebrief(@CurrentAccount CurrentAccountDto account, @PathVariable UUID attemptId) {
         return practiceService.getDebrief(account, attemptId);
     }
 
     @PutMapping("/attempts/{attemptId}/self-assessment")
     public ReviewItemDto setSelfAssessment(
-            @CurrentAccount Account account, @PathVariable UUID attemptId, @Valid @RequestBody SelfAssessmentInput input) {
+            @CurrentAccount CurrentAccountDto account, @PathVariable UUID attemptId, @Valid @RequestBody SelfAssessmentInput input) {
         return practiceService.setSelfAssessment(account, attemptId, input.mastery(), input.note());
     }
 }

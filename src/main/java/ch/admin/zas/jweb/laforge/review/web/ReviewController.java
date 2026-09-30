@@ -5,7 +5,7 @@ import ch.admin.zas.jweb.laforge.common.page.PageQuery;
 import ch.admin.zas.jweb.laforge.review.domain.ReviewState;
 import ch.admin.zas.jweb.laforge.review.dto.ReviewItemDto;
 import ch.admin.zas.jweb.laforge.review.service.ReviewService;
-import ch.admin.zas.jweb.laforge.security.domain.Account;
+import ch.admin.zas.jweb.laforge.security.dto.CurrentAccountDto;
 import ch.admin.zas.jweb.laforge.security.web.CurrentAccount;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -23,7 +23,7 @@ public class ReviewController {
 
     @GetMapping("/me/reviews")
     public Page<ReviewItemDto> listMyReviews(
-            @CurrentAccount Account account,
+            @CurrentAccount CurrentAccountDto account,
             @RequestParam(required = false) Integer limit,
             @RequestParam(required = false) String cursor,
             @RequestParam(required = false) ReviewState state) {

@@ -5,7 +5,7 @@ import ch.admin.zas.jweb.laforge.common.page.Page;
 import ch.admin.zas.jweb.laforge.common.page.PageQuery;
 import ch.admin.zas.jweb.laforge.common.ratelimit.RateLimited;
 import ch.admin.zas.jweb.laforge.common.ratelimit.RateLimitFamily;
-import ch.admin.zas.jweb.laforge.security.domain.Account;
+import ch.admin.zas.jweb.laforge.security.dto.CurrentAccountDto;
 import ch.admin.zas.jweb.laforge.security.web.CurrentAccount;
 import ch.admin.zas.jweb.laforge.tutor.dto.TutorExchangeDto;
 import ch.admin.zas.jweb.laforge.tutor.dto.TutorQuestionInput;
@@ -33,7 +33,7 @@ public class TutorController {
 
     @GetMapping("/attempts/{attemptId}/tutor-exchanges")
     public Page<TutorExchangeDto> listTutorExchanges(
-            @CurrentAccount Account account,
+            @CurrentAccount CurrentAccountDto account,
             @PathVariable UUID attemptId,
             @RequestParam(required = false) Integer limit,
             @RequestParam(required = false) String cursor) {
@@ -45,7 +45,7 @@ public class TutorController {
     @Idempotent
     @RateLimited(RateLimitFamily.TUTOR)
     public TutorExchangeDto askTutor(
-            @CurrentAccount Account account, @PathVariable UUID attemptId, @Valid @RequestBody TutorQuestionInput input) {
+            @CurrentAccount CurrentAccountDto account, @PathVariable UUID attemptId, @Valid @RequestBody TutorQuestionInput input) {
         return tutorService.askTutor(account, attemptId, input.question());
     }
 }

@@ -20,6 +20,7 @@ import java.time.OffsetDateTime;
 import java.util.SortedSet;
 import java.util.TreeSet;
 import java.util.UUID;
+import org.hibernate.annotations.ColumnTransformer;
 
 /**
  * Tentative de pratique d'une version d'exercice par un apprenant. {@code challengeId} et
@@ -56,6 +57,7 @@ public class Attempt extends BaseEntity {
     private OffsetDateTime submittedAt;
 
     @Convert(converter = AnswerConverter.class)
+    @ColumnTransformer(write = "cast(? as jsonb)")
     @Column(name = "answer", columnDefinition = "jsonb")
     private Answer answer;
 

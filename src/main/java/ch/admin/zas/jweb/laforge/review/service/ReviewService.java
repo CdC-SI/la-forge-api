@@ -8,7 +8,7 @@ import ch.admin.zas.jweb.laforge.review.domain.ReviewItem;
 import ch.admin.zas.jweb.laforge.review.domain.ReviewState;
 import ch.admin.zas.jweb.laforge.review.dto.ReviewItemDto;
 import ch.admin.zas.jweb.laforge.review.repository.ReviewItemRepository;
-import ch.admin.zas.jweb.laforge.security.domain.Account;
+import ch.admin.zas.jweb.laforge.security.dto.CurrentAccountDto;
 import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.util.HashMap;
@@ -38,7 +38,7 @@ public class ReviewService {
     }
 
     /** Fiches de l'appelant, triées par {@code dueAt} croissant puis id ; {@code state} par défaut à {@code DUE}. */
-    public Page<ReviewItemDto> listMyReviews(Account learner, PageQuery pageQuery, ReviewState state) {
+    public Page<ReviewItemDto> listMyReviews(CurrentAccountDto learner, PageQuery pageQuery, ReviewState state) {
         var effectiveState = state == null ? ReviewState.DUE : state;
         var filters = new HashMap<String, Object>();
         filters.put("state", effectiveState);
@@ -53,7 +53,7 @@ public class ReviewService {
         }
 
         var now = OffsetDateTime.now(clock);
-        Specification<ReviewItem> spec = (root, query, cb) -> cb.equal(root.get("learner").get("id"), learner.getId());
+        Specification<ReviewItem> spec = (root, query, cb) -> cb.equal(root.get("learner").get("id"), learner.id());
         spec = spec.and(switch (effectiveState) {
             case COMPLETED -> (root, query, cb) -> cb.isNotNull(root.get("completedAt"));
             case DUE -> (root, query, cb) -> cb.and(cb.isNull(root.get("completedAt")), cb.lessThanOrEqualTo(root.get("dueAt"), now));

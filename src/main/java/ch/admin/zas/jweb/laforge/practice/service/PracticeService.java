@@ -34,7 +34,8 @@ import ch.admin.zas.jweb.laforge.review.domain.ReviewReason;
 import ch.admin.zas.jweb.laforge.review.domain.ReviewState;
 import ch.admin.zas.jweb.laforge.review.dto.ReviewItemDto;
 import ch.admin.zas.jweb.laforge.review.repository.ReviewItemRepository;
-import ch.admin.zas.jweb.laforge.security.domain.Account;
+import ch.admin.zas.jweb.laforge.security.dto.CurrentAccountDto;
+import ch.admin.zas.jweb.laforge.security.repository.AccountRepository;
 import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.util.HashMap;
@@ -61,6 +62,7 @@ public class PracticeService {
     private final ReviewItemRepository reviewItemRepository;
     private final ChallengeRepository challengeRepository;
     private final ChallengeParticipantRepository challengeParticipantRepository;
+    private final AccountRepository accountRepository;
     private final Clock clock;
 
     public PracticeService(
@@ -69,12 +71,14 @@ public class PracticeService {
             ReviewItemRepository reviewItemRepository,
             ChallengeRepository challengeRepository,
             ChallengeParticipantRepository challengeParticipantRepository,
+            AccountRepository accountRepository,
             Clock clock) {
         this.attemptRepository = attemptRepository;
         this.exerciseVersionRepository = exerciseVersionRepository;
         this.reviewItemRepository = reviewItemRepository;
         this.challengeRepository = challengeRepository;
         this.challengeParticipantRepository = challengeParticipantRepository;
+        this.accountRepository = accountRepository;
         this.clock = clock;
     }
 
@@ -86,7 +90,7 @@ public class PracticeService {
      * @throws InvalidStateException  si une précondition de défi, de révision ou de tentative en cours n'est pas respectée
      */
     @Transactional
-    public AttemptDto createAttempt(Account learner, CreateAttemptInput input) {
+    public AttemptDto createAttempt(CurrentAccountDto learner, CreateAttemptInput input) {
         if (input.challengeId() != null && input.reviewItemId() != null) {
             throw new BadRequestException("Une tentative ne peut être liée à la fois à un défi et à une révision.");
         }
@@ -96,19 +100,24 @@ public class PracticeService {
                 .orElseThrow(() -> new NotFoundException("Cette version d'exercice n'existe pas ou n'est pas publiée."));
 
         if (input.challengeId() != null) {
-            validateChallengeAttempt(learner, version, input.challengeId());
+            validateChallengeAttempt(learner.id(), version, input.challengeId());
         } else if (input.reviewItemId() != null) {
-            validateReviewAttempt(learner, version, input.reviewItemId());
+            validateReviewAttempt(learner.id(), version, input.reviewItemId());
         } else if (attemptRepository.existsByLearner_IdAndExerciseVersion_IdAndStatus(
-                learner.getId(), version.getId(), AttemptStatus.IN_PROGRESS)) {
+                learner.id(), version.getId(), AttemptStatus.IN_PROGRESS)) {
             throw new InvalidStateException("Une tentative est déjà en cours sur cette version d'exercice.");
         }
 
-        var attempt = new Attempt(learner, version, input.challengeId(), input.reviewItemId(), OffsetDateTime.now(clock));
+        var attempt = new Attempt(
+                accountRepository.getReferenceById(learner.id()),
+                version,
+                input.challengeId(),
+                input.reviewItemId(),
+                OffsetDateTime.now(clock));
         return AttemptDto.from(attemptRepository.save(attempt));
     }
 
-    private void validateChallengeAttempt(Account learner, ExerciseVersion version, UUID challengeId) {
+    private void validateChallengeAttempt(UUID learnerId, ExerciseVersion version, UUID challengeId) {
         var challenge = challengeRepository.findById(challengeId)
                 .orElseThrow(() -> new NotFoundException("Défi introuvable."));
         if (challenge.getState() != ChallengeState.OPEN) {
@@ -118,23 +127,23 @@ public class PracticeService {
             throw new InvalidStateException("La version d'exercice ne correspond pas à ce défi.");
         }
         challengeParticipantRepository
-                .findByChallenge_IdAndAccount_Id(challengeId, learner.getId())
+                .findByChallenge_IdAndAccount_Id(challengeId, learnerId)
                 .orElseThrow(() -> new InvalidStateException("Inscription au défi requise."));
-        attemptRepository.findByChallengeIdAndLearner_Id(challengeId, learner.getId())
+        attemptRepository.findByChallengeIdAndLearner_Id(challengeId, learnerId)
                 .ifPresent(existing -> {
                     throw new InvalidStateException("Une tentative existe déjà pour ce défi.");
                 });
         if (attemptRepository.existsByLearner_IdAndExerciseVersion_IdAndStatus(
-                learner.getId(), version.getId(), AttemptStatus.SUBMITTED)
-                || attemptRepository.existsRevealedHintOutsideChallenge(learner.getId(), version.getId(), challengeId)) {
+                learnerId, version.getId(), AttemptStatus.SUBMITTED)
+                || attemptRepository.existsRevealedHintOutsideChallenge(learnerId, version.getId(), challengeId)) {
             throw new InvalidStateException(
                     "Une pratique antérieure de cette version hors de ce défi interdit d'y participer.");
         }
     }
 
-    private void validateReviewAttempt(Account learner, ExerciseVersion version, UUID reviewItemId) {
+    private void validateReviewAttempt(UUID learnerId, ExerciseVersion version, UUID reviewItemId) {
         var reviewItem = reviewItemRepository.findById(reviewItemId)
-                .filter(item -> item.getLearner().getId().equals(learner.getId()))
+                .filter(item -> item.getLearner().getId().equals(learnerId))
                 .orElseThrow(() -> new NotFoundException("Révision introuvable."));
         if (!reviewItem.getExerciseVersion().getId().equals(version.getId())) {
             throw new InvalidStateException("La version d'exercice ne correspond pas à cette révision.");
@@ -158,7 +167,7 @@ public class PracticeService {
      * @throws ValidationFailedException si le type de réponse ne correspond pas au format attendu
      */
     @Transactional
-    public AttemptDto submitAttempt(Account learner, UUID attemptId, Answer answer) {
+    public AttemptDto submitAttempt(CurrentAccountDto learner, UUID attemptId, Answer answer) {
         var attempt = findOwnedAttempt(learner, attemptId);
         var version = attempt.getExerciseVersion();
 
@@ -189,11 +198,11 @@ public class PracticeService {
         var triggersReview = result == ObjectiveResult.INCORRECT || answer.confidence() <= 2;
         if (triggersReview
                 && reviewItemRepository
-                        .findByLearner_IdAndExerciseIdAndCompletedAtIsNull(learner.getId(), version.getExercise().getId())
+                        .findByLearner_IdAndExerciseIdAndCompletedAtIsNull(learner.id(), version.getExercise().getId())
                         .isEmpty()) {
             var reason = result == ObjectiveResult.INCORRECT ? ReviewReason.INCORRECT : ReviewReason.LOW_CONFIDENCE;
             var dueAt = now.plusDays(reason == ReviewReason.INCORRECT ? 1 : 2);
-            reviewItemRepository.save(new ReviewItem(learner, version, attempt, dueAt, reason));
+            reviewItemRepository.save(new ReviewItem(attempt.getLearner(), version, attempt, dueAt, reason));
         }
         return AttemptDto.from(attempt);
     }
@@ -228,7 +237,7 @@ public class PracticeService {
      * @throws InvalidStateException si la tentative est déjà soumise ou liée à un défi
      */
     @Transactional
-    public AttemptDto abandonAttempt(Account learner, UUID attemptId) {
+    public AttemptDto abandonAttempt(CurrentAccountDto learner, UUID attemptId) {
         var attempt = findOwnedAttempt(learner, attemptId);
         attempt.abandon();
         return AttemptDto.from(attempt);
@@ -243,7 +252,7 @@ public class PracticeService {
      * @throws ch.admin.zas.jweb.laforge.common.error.ForbiddenException si la tentative est liée à un défi
      */
     @Transactional
-    public Hint revealHint(Account learner, UUID attemptId, int level) {
+    public Hint revealHint(CurrentAccountDto learner, UUID attemptId, int level) {
         var attempt = findOwnedAttempt(learner, attemptId);
         var hints = attempt.getExerciseVersion().getHints();
         if (level < 1 || level > hints.size()) {
@@ -259,7 +268,7 @@ public class PracticeService {
      * @throws NotFoundException     si la tentative n'existe pas ou n'appartient pas à l'appelant
      * @throws InvalidStateException si la tentative n'est pas encore soumise
      */
-    public DebriefDto getDebrief(Account learner, UUID attemptId) {
+    public DebriefDto getDebrief(CurrentAccountDto learner, UUID attemptId) {
         var attempt = findOwnedAttempt(learner, attemptId);
         if (attempt.getStatus() != AttemptStatus.SUBMITTED) {
             throw new InvalidStateException("Le débrief exige une tentative déjà soumise.");
@@ -284,7 +293,7 @@ public class PracticeService {
      * @throws InvalidStateException si la tentative n'est pas soumise, ou si la fiche de suivi est déjà commencée/terminée
      */
     @Transactional
-    public ReviewItemDto setSelfAssessment(Account learner, UUID attemptId, SelfAssessmentMastery mastery, String note) {
+    public ReviewItemDto setSelfAssessment(CurrentAccountDto learner, UUID attemptId, SelfAssessmentMastery mastery, String note) {
         var attempt = findOwnedAttempt(learner, attemptId);
         var previousMastery = attempt.getSelfAssessmentMastery();
         attempt.recordSelfAssessment(mastery, note);
@@ -293,8 +302,8 @@ public class PracticeService {
         var dueAt = now.plusDays(dayOffset(mastery));
         var existing = reviewItemRepository.findBySourceAttempt_Id(attemptId);
         if (existing.isEmpty()) {
-            var created = reviewItemRepository.save(
-                    new ReviewItem(learner, attempt.getExerciseVersion(), attempt, dueAt, ReviewReason.SELF_ASSESSMENT));
+            var created = reviewItemRepository.save(new ReviewItem(
+                    attempt.getLearner(), attempt.getExerciseVersion(), attempt, dueAt, ReviewReason.SELF_ASSESSMENT));
             return ReviewItemDto.from(created, clock);
         }
 
@@ -323,12 +332,12 @@ public class PracticeService {
     }
 
     /** @throws NotFoundException si la tentative n'existe pas ou n'appartient pas à l'appelant */
-    public AttemptDto getAttempt(Account learner, UUID attemptId) {
+    public AttemptDto getAttempt(CurrentAccountDto learner, UUID attemptId) {
         return AttemptDto.from(findOwnedAttempt(learner, attemptId));
     }
 
     /** Tentatives de l'appelant, triées par {@code startedAt} décroissant puis id, filtrables par statut. */
-    public Page<AttemptDto> listMyAttempts(Account learner, PageQuery pageQuery, AttemptStatus status) {
+    public Page<AttemptDto> listMyAttempts(CurrentAccountDto learner, PageQuery pageQuery, AttemptStatus status) {
         var filters = new HashMap<String, Object>();
         filters.put("status", status);
         var fingerprint = CursorCodec.fingerprint(filters);
@@ -341,7 +350,7 @@ public class PracticeService {
             afterId = UUID.fromString(keys.get(1));
         }
 
-        Specification<Attempt> spec = (root, query, cb) -> cb.equal(root.get("learner").get("id"), learner.getId());
+        Specification<Attempt> spec = (root, query, cb) -> cb.equal(root.get("learner").get("id"), learner.id());
         if (status != null) {
             spec = spec.and((root, query, cb) -> cb.equal(root.get("status"), status));
         }
@@ -359,8 +368,8 @@ public class PracticeService {
         return Page.of(items, nextCursor);
     }
 
-    private Attempt findOwnedAttempt(Account learner, UUID attemptId) {
-        return attemptRepository.findByIdAndLearner_Id(attemptId, learner.getId())
+    private Attempt findOwnedAttempt(CurrentAccountDto learner, UUID attemptId) {
+        return attemptRepository.findByIdAndLearner_Id(attemptId, learner.id())
                 .orElseThrow(() -> new NotFoundException("Tentative introuvable."));
     }
 }

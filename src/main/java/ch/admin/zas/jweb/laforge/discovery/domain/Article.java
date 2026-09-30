@@ -21,6 +21,7 @@ import java.time.OffsetDateTime;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import org.hibernate.annotations.ColumnTransformer;
 
 /**
  * Fiche de veille technique, publiée directement par un {@code REVIEWER}/{@code ADMIN} (pas de
@@ -41,10 +42,12 @@ public class Article extends BaseEntity {
     private String bodyMarkdown;
 
     @Convert(converter = TechnologyRequirementsConverter.class)
+    @ColumnTransformer(write = "cast(? as jsonb)")
     @Column(name = "technologies", columnDefinition = "jsonb")
     private List<TechnologyRequirement> technologies;
 
     @Convert(converter = ArticleSourcesConverter.class)
+    @ColumnTransformer(write = "cast(? as jsonb)")
     @Column(name = "sources", nullable = false, columnDefinition = "jsonb")
     private List<Source> sources;
 

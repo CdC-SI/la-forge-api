@@ -1,7 +1,7 @@
 package ch.admin.zas.jweb.laforge.security.web;
 
 import ch.admin.zas.jweb.laforge.common.error.UnauthenticatedException;
-import ch.admin.zas.jweb.laforge.security.domain.Account;
+import ch.admin.zas.jweb.laforge.security.dto.CurrentAccountDto;
 import ch.admin.zas.jweb.laforge.security.repository.AccountRepository;
 import java.util.UUID;
 import org.springframework.core.MethodParameter;
@@ -29,7 +29,8 @@ public class CurrentAccountArgumentResolver implements HandlerMethodArgumentReso
 
     @Override
     public boolean supportsParameter(MethodParameter parameter) {
-        return parameter.hasParameterAnnotation(CurrentAccount.class) && parameter.getParameterType() == Account.class;
+        return parameter.hasParameterAnnotation(CurrentAccount.class)
+                && parameter.getParameterType() == CurrentAccountDto.class;
     }
 
     @Override
@@ -44,6 +45,7 @@ public class CurrentAccountArgumentResolver implements HandlerMethodArgumentReso
         }
         var accountId = UUID.fromString(jwt.getSubject());
         return accountRepository.findById(accountId)
+                .map(CurrentAccountDto::from)
                 .orElseThrow(() -> new UnauthenticatedException("Le compte associé au jeton n'existe plus."));
     }
 }

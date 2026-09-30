@@ -23,8 +23,9 @@ import ch.admin.zas.jweb.laforge.common.page.CursorCodec;
 import ch.admin.zas.jweb.laforge.common.page.KeysetPredicates;
 import ch.admin.zas.jweb.laforge.common.page.Page;
 import ch.admin.zas.jweb.laforge.common.page.PageQuery;
-import ch.admin.zas.jweb.laforge.security.domain.Account;
 import ch.admin.zas.jweb.laforge.security.domain.Role;
+import ch.admin.zas.jweb.laforge.security.dto.CurrentAccountDto;
+import ch.admin.zas.jweb.laforge.security.repository.AccountRepository;
 import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.util.HashMap;
@@ -51,6 +52,7 @@ public class AuthoringService {
     private final ExerciseRepository exerciseRepository;
     private final ExerciseVersionRepository exerciseVersionRepository;
     private final TopicRepository topicRepository;
+    private final AccountRepository accountRepository;
     private final Clock clock;
 
     public AuthoringService(
@@ -59,12 +61,14 @@ public class AuthoringService {
             ExerciseRepository exerciseRepository,
             ExerciseVersionRepository exerciseVersionRepository,
             TopicRepository topicRepository,
+            AccountRepository accountRepository,
             Clock clock) {
         this.draftRepository = draftRepository;
         this.editorialReviewRepository = editorialReviewRepository;
         this.exerciseRepository = exerciseRepository;
         this.exerciseVersionRepository = exerciseVersionRepository;
         this.topicRepository = topicRepository;
+        this.accountRepository = accountRepository;
         this.clock = clock;
     }
 
@@ -72,7 +76,7 @@ public class AuthoringService {
      * Brouillons accessibles à l'appelant selon ses rôles cumulatifs : AUTHOR voit les siens,
      * REVIEWER voit les {@code IN_REVIEW} et ceux qu'il a déjà relus, ADMIN voit tout.
      */
-    public Page<DraftDto> listDrafts(Account account, PageQuery pageQuery, DraftState state) {
+    public Page<DraftDto> listDrafts(CurrentAccountDto account, PageQuery pageQuery, DraftState state) {
         var filters = new HashMap<String, Object>();
         filters.put("state", state);
         var fingerprint = CursorCodec.fingerprint(filters);
@@ -105,17 +109,17 @@ public class AuthoringService {
         return Page.of(items, nextCursor);
     }
 
-    private Specification<Draft> visibilitySpecification(Account account) {
+    private Specification<Draft> visibilitySpecification(CurrentAccountDto account) {
         if (account.hasAnyRole(Set.of(Role.ADMIN))) {
             return (root, query, cb) -> cb.conjunction();
         }
         var reviewedDraftIds = account.hasAnyRole(Set.of(Role.REVIEWER))
-                ? editorialReviewRepository.findDistinctDraftIdsByReviewer(account.getId())
+                ? editorialReviewRepository.findDistinctDraftIdsByReviewer(account.id())
                 : List.<UUID>of();
         return (root, query, cb) -> {
             var predicates = new java.util.ArrayList<jakarta.persistence.criteria.Predicate>();
             if (account.hasAnyRole(Set.of(Role.AUTHOR))) {
-                predicates.add(cb.equal(root.get("author").get("id"), account.getId()));
+                predicates.add(cb.equal(root.get("author").get("id"), account.id()));
             }
             if (account.hasAnyRole(Set.of(Role.REVIEWER))) {
                 predicates.add(cb.equal(root.get("state"), DraftState.IN_REVIEW));
@@ -128,7 +132,7 @@ public class AuthoringService {
     }
 
     /** @throws NotFoundException si le brouillon n'existe pas ou est hors du périmètre de l'appelant */
-    public DraftDto getDraft(Account account, UUID draftId) {
+    public DraftDto getDraft(CurrentAccountDto account, UUID draftId) {
         var draft = findVisibleDraft(account, draftId);
         return DraftDto.from(draft, editorialReviewRepository);
     }
@@ -142,7 +146,7 @@ public class AuthoringService {
      * @throws InvalidStateException si une révision non publiée existe déjà pour cet exercice
      */
     @Transactional
-    public DraftDto createDraft(Account account, UUID exerciseId, ExerciseContentInput content) {
+    public DraftDto createDraft(CurrentAccountDto account, UUID exerciseId, ExerciseContentInput content) {
         var isAdmin = account.hasAnyRole(Set.of(Role.ADMIN));
         Exercise exercise;
         int baseVersion;
@@ -152,7 +156,7 @@ public class AuthoringService {
         } else {
             exercise = exerciseRepository.findById(exerciseId)
                     .orElseThrow(() -> new NotFoundException("Exercice introuvable."));
-            if (!isAdmin && !draftRepository.existsByExercise_IdAndAuthor_Id(exerciseId, account.getId())) {
+            if (!isAdmin && !draftRepository.existsByExercise_IdAndAuthor_Id(exerciseId, account.id())) {
                 throw new ForbiddenException("Seul l'auteur de l'exercice ou un administrateur peut ouvrir une révision.");
             }
             draftRepository.findByExerciseIdAndStateNot(exerciseId, DraftState.PUBLISHED).ifPresent(existing -> {
@@ -165,9 +169,10 @@ public class AuthoringService {
         }
 
         var topics = resolveTopics(content.topicIds());
+        var author = accountRepository.getReferenceById(account.id());
         var draft = new Draft(
                 exercise,
-                account,
+                author,
                 baseVersion,
                 content.title(),
                 content.type(),
@@ -193,7 +198,7 @@ public class AuthoringService {
      * @throws ch.admin.zas.jweb.laforge.common.error.StaleVersionException si {@code expectedRevision} est obsolète
      */
     @Transactional
-    public DraftDto replaceDraft(Account account, UUID draftId, int expectedRevision, ExerciseContentInput content) {
+    public DraftDto replaceDraft(CurrentAccountDto account, UUID draftId, int expectedRevision, ExerciseContentInput content) {
         var draft = findOwnedDraft(account, draftId);
         var topics = resolveTopics(content.topicIds());
         draft.replaceContent(
@@ -221,7 +226,7 @@ public class AuthoringService {
      * @throws ValidationFailedException si le contenu est incohérent (indices, choix, thèmes)
      */
     @Transactional
-    public DraftDto submitDraftForReview(Account account, UUID draftId, int expectedRevision) {
+    public DraftDto submitDraftForReview(CurrentAccountDto account, UUID draftId, int expectedRevision) {
         var draft = findOwnedDraft(account, draftId);
         validateConsistency(draft);
         draft.submitForReview(expectedRevision);
@@ -269,16 +274,17 @@ public class AuthoringService {
      * @throws ch.admin.zas.jweb.laforge.common.error.StaleVersionException si {@code expectedRevision} est obsolète
      */
     @Transactional
-    public DraftDto reviewDraft(Account reviewer, UUID draftId, int expectedRevision, ReviewDecision decision, String comment) {
+    public DraftDto reviewDraft(CurrentAccountDto reviewer, UUID draftId, int expectedRevision, ReviewDecision decision, String comment) {
         var draft = findVisibleDraft(reviewer, draftId);
         var now = OffsetDateTime.now(clock);
         var reviewerIsAdmin = reviewer.hasAnyRole(Set.of(Role.ADMIN));
+        var reviewerEntity = accountRepository.getReferenceById(reviewer.id());
         if (decision == ReviewDecision.APPROVE) {
-            draft.approve(expectedRevision, reviewer, reviewerIsAdmin);
+            draft.approve(expectedRevision, reviewerEntity, reviewerIsAdmin);
         } else {
             draft.requestChanges(expectedRevision);
         }
-        editorialReviewRepository.save(new EditorialReview(draft, reviewer, decision, comment, now));
+        editorialReviewRepository.save(new EditorialReview(draft, reviewerEntity, decision, comment, now));
         return DraftDto.from(draft, editorialReviewRepository);
     }
 
@@ -292,7 +298,7 @@ public class AuthoringService {
      * @throws ch.admin.zas.jweb.laforge.common.error.StaleVersionException si {@code expectedRevision} est obsolète
      */
     @Transactional
-    public ExerciseDto publishDraft(Account account, UUID draftId, int expectedRevision) {
+    public ExerciseDto publishDraft(CurrentAccountDto account, UUID draftId, int expectedRevision) {
         var draft = findOwnedDraft(account, draftId);
         var latestPublished = exerciseVersionRepository
                 .findFirstByExercise_IdAndPublishedAtIsNotNullOrderByVersionNumberDesc(draft.getExercise().getId())
@@ -325,22 +331,22 @@ public class AuthoringService {
         return ExerciseDto.from(version);
     }
 
-    private Draft findOwnedDraft(Account account, UUID draftId) {
+    private Draft findOwnedDraft(CurrentAccountDto account, UUID draftId) {
         var draft = draftRepository.findById(draftId).orElseThrow(() -> new NotFoundException("Brouillon introuvable."));
-        if (!account.hasAnyRole(Set.of(Role.ADMIN)) && !draft.getAuthor().getId().equals(account.getId())) {
+        if (!account.hasAnyRole(Set.of(Role.ADMIN)) && !draft.getAuthor().getId().equals(account.id())) {
             throw new ForbiddenException("Seul l'auteur du brouillon ou un administrateur peut effectuer cette action.");
         }
         return draft;
     }
 
-    private Draft findVisibleDraft(Account account, UUID draftId) {
+    private Draft findVisibleDraft(CurrentAccountDto account, UUID draftId) {
         var draft = draftRepository.findById(draftId).orElseThrow(() -> new NotFoundException("Brouillon introuvable."));
         var isAdmin = account.hasAnyRole(Set.of(Role.ADMIN));
-        var isOwner = account.hasAnyRole(Set.of(Role.AUTHOR)) && draft.getAuthor().getId().equals(account.getId());
+        var isOwner = account.hasAnyRole(Set.of(Role.AUTHOR)) && draft.getAuthor().getId().equals(account.id());
         var isReviewerVisible = account.hasAnyRole(Set.of(Role.REVIEWER))
                 && (draft.getState() == DraftState.IN_REVIEW
                         || !editorialReviewRepository.findByDraftOrderByReviewedAtAsc(draft).stream()
-                                .noneMatch(review -> review.getReviewer().getId().equals(account.getId())));
+                                .noneMatch(review -> review.getReviewer().getId().equals(account.id())));
         if (!isAdmin && !isOwner && !isReviewerVisible) {
             throw new NotFoundException("Brouillon introuvable.");
         }

@@ -11,7 +11,7 @@ import ch.admin.zas.jweb.laforge.common.concurrency.ETagSupport;
 import ch.admin.zas.jweb.laforge.common.idempotency.Idempotent;
 import ch.admin.zas.jweb.laforge.common.page.Page;
 import ch.admin.zas.jweb.laforge.common.page.PageQuery;
-import ch.admin.zas.jweb.laforge.security.domain.Account;
+import ch.admin.zas.jweb.laforge.security.dto.CurrentAccountDto;
 import ch.admin.zas.jweb.laforge.security.web.CurrentAccount;
 import jakarta.validation.Valid;
 import java.util.UUID;
@@ -40,7 +40,7 @@ public class DraftController {
     @GetMapping("/authoring/drafts")
     @PreAuthorize("hasAnyRole('AUTHOR', 'REVIEWER', 'ADMIN')")
     public Page<DraftDto> listDrafts(
-            @CurrentAccount Account account,
+            @CurrentAccount CurrentAccountDto account,
             @RequestParam(required = false) Integer limit,
             @RequestParam(required = false) String cursor,
             @RequestParam(required = false) DraftState state) {
@@ -50,14 +50,14 @@ public class DraftController {
     @PostMapping("/authoring/drafts")
     @PreAuthorize("hasAnyRole('AUTHOR', 'ADMIN')")
     @Idempotent
-    public ResponseEntity<DraftDto> createDraft(@CurrentAccount Account account, @Valid @RequestBody DraftInput input) {
+    public ResponseEntity<DraftDto> createDraft(@CurrentAccount CurrentAccountDto account, @Valid @RequestBody DraftInput input) {
         var draft = authoringService.createDraft(account, input.exerciseId(), input.content());
         return ETagSupport.withETag(HttpStatus.CREATED, draft.revision(), draft);
     }
 
     @GetMapping("/authoring/drafts/{draftId}")
     @PreAuthorize("hasAnyRole('AUTHOR', 'REVIEWER', 'ADMIN')")
-    public ResponseEntity<DraftDto> getDraft(@CurrentAccount Account account, @PathVariable UUID draftId) {
+    public ResponseEntity<DraftDto> getDraft(@CurrentAccount CurrentAccountDto account, @PathVariable UUID draftId) {
         var draft = authoringService.getDraft(account, draftId);
         return ETagSupport.withETag(HttpStatus.OK, draft.revision(), draft);
     }
@@ -65,7 +65,7 @@ public class DraftController {
     @PutMapping("/authoring/drafts/{draftId}")
     @PreAuthorize("hasAnyRole('AUTHOR', 'ADMIN')")
     public ResponseEntity<DraftDto> replaceDraft(
-            @CurrentAccount Account account,
+            @CurrentAccount CurrentAccountDto account,
             @PathVariable UUID draftId,
             @RequestHeader(value = "If-Match", required = false) String ifMatch,
             @Valid @RequestBody DraftUpdateInput input) {
@@ -76,7 +76,7 @@ public class DraftController {
     @PostMapping("/authoring/drafts/{draftId}/submit")
     @PreAuthorize("hasAnyRole('AUTHOR', 'ADMIN')")
     public ResponseEntity<DraftDto> submitDraftForReview(
-            @CurrentAccount Account account,
+            @CurrentAccount CurrentAccountDto account,
             @PathVariable UUID draftId,
             @RequestHeader(value = "If-Match", required = false) String ifMatch) {
         var draft = authoringService.submitDraftForReview(account, draftId, ETagSupport.requireRevision(ifMatch));
@@ -86,7 +86,7 @@ public class DraftController {
     @PostMapping("/authoring/drafts/{draftId}/review")
     @PreAuthorize("hasAnyRole('REVIEWER', 'ADMIN')")
     public ResponseEntity<DraftDto> reviewDraft(
-            @CurrentAccount Account account,
+            @CurrentAccount CurrentAccountDto account,
             @PathVariable UUID draftId,
             @RequestHeader(value = "If-Match", required = false) String ifMatch,
             @Valid @RequestBody ReviewInput input) {
@@ -98,7 +98,7 @@ public class DraftController {
     @PostMapping("/authoring/drafts/{draftId}/publish")
     @PreAuthorize("hasAnyRole('AUTHOR', 'ADMIN')")
     public ExerciseDto publishDraft(
-            @CurrentAccount Account account,
+            @CurrentAccount CurrentAccountDto account,
             @PathVariable UUID draftId,
             @RequestHeader(value = "If-Match", required = false) String ifMatch) {
         return authoringService.publishDraft(account, draftId, ETagSupport.requireRevision(ifMatch));

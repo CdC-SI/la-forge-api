@@ -37,6 +37,7 @@ import jakarta.persistence.Version;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import org.hibernate.annotations.ColumnTransformer;
 
 /**
  * Brouillon d'exercice porté par la machine à états éditoriale {@code DRAFT → IN_REVIEW →
@@ -88,26 +89,32 @@ public class Draft extends BaseEntity {
     private String promptMarkdown;
 
     @Convert(converter = LearningObjectivesConverter.class)
+    @ColumnTransformer(write = "cast(? as jsonb)")
     @Column(name = "learning_objectives", nullable = false, columnDefinition = "jsonb")
     private List<String> learningObjectives;
 
     @Convert(converter = CodeFilesConverter.class)
+    @ColumnTransformer(write = "cast(? as jsonb)")
     @Column(name = "files", columnDefinition = "jsonb")
     private List<CodeFile> files;
 
     @Convert(converter = TechnologyRequirementsConverter.class)
+    @ColumnTransformer(write = "cast(? as jsonb)")
     @Column(name = "technologies", columnDefinition = "jsonb")
     private List<TechnologyRequirement> technologies;
 
     @Convert(converter = ResponseSpecConverter.class)
+    @ColumnTransformer(write = "cast(? as jsonb)")
     @Column(name = "response_spec", nullable = false, columnDefinition = "jsonb")
     private ResponseSpec responseSpec;
 
     @Convert(converter = HintsConverter.class)
+    @ColumnTransformer(write = "cast(? as jsonb)")
     @Column(name = "hints", columnDefinition = "jsonb")
     private List<Hint> hints;
 
     @Convert(converter = CorrectionConverter.class)
+    @ColumnTransformer(write = "cast(? as jsonb)")
     @Column(name = "correction", nullable = false, columnDefinition = "jsonb")
     private Correction correction;
 

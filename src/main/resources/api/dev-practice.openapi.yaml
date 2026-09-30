@@ -338,8 +338,8 @@ paths:
       - Catalog
       operationId: listTopics
       summary: Lister les thèmes
-      description: Référentiel initial chargé avec le contenu du pilote. Ordre label puis id ; gestion du référentiel
-        hors API MVP.
+      description: Référentiel initial chargé avec le contenu du pilote. Ordre label puis id ; ajout via
+        POST /topics.
       responses:
         '200':
           description: Lister les thèmes.
@@ -362,6 +362,43 @@ paths:
       parameters:
       - $ref: '#/components/parameters/Limit'
       - $ref: '#/components/parameters/Cursor'
+    post:
+      tags:
+      - Catalog
+      operationId: createTopic
+      summary: Ajouter un thème
+      description: Réservé aux rôles AUTHOR et ADMIN. L’identifiant est généré par le serveur. Un slug déjà
+        utilisé produit un conflit.
+      responses:
+        '201':
+          description: Thème créé.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Topic'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopicInput'
+      x-required-roles:
+      - AUTHOR
+      - ADMIN
   /exercises:
     get:
       tags:
@@ -2176,6 +2213,21 @@ components:
           minLength: 1
       required:
       - id
+      - slug
+      - label
+    TopicInput:
+      type: object
+      additionalProperties: false
+      properties:
+        slug:
+          type: string
+          maxLength: 80
+          pattern: ^[a-z0-9-]+$
+        label:
+          type: string
+          maxLength: 200
+          minLength: 1
+      required:
       - slug
       - label
     Source:

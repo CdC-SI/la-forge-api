@@ -7,8 +7,8 @@ import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 
 /**
- * Thème du référentiel de pratique (ex. « Java », « Angular »). Référentiel géré hors API en v1 ;
- * seule sa lecture est exposée ({@code GET /topics}).
+ * Thème du référentiel de pratique (ex. « Java », « Angular »). Lu via {@code GET /topics} et
+ * enrichi via {@code POST /topics} (rôles AUTHOR ou ADMIN).
  */
 @Entity
 @Table(name = "topic", uniqueConstraints = @UniqueConstraint(name = "uk_topic_slug", columnNames = "slug"))

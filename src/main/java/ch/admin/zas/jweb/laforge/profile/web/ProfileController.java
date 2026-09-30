@@ -5,7 +5,7 @@ import ch.admin.zas.jweb.laforge.profile.dto.PreferencesDto;
 import ch.admin.zas.jweb.laforge.profile.dto.ProgressDto;
 import ch.admin.zas.jweb.laforge.profile.dto.UserDto;
 import ch.admin.zas.jweb.laforge.profile.service.ProfileService;
-import ch.admin.zas.jweb.laforge.security.domain.Account;
+import ch.admin.zas.jweb.laforge.security.dto.CurrentAccountDto;
 import ch.admin.zas.jweb.laforge.security.web.CurrentAccount;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -24,22 +24,22 @@ public class ProfileController {
     }
 
     @GetMapping("/me")
-    public UserDto getMe(@CurrentAccount Account account) {
+    public UserDto getMe(@CurrentAccount CurrentAccountDto account) {
         return profileService.getMe(account);
     }
 
     @PutMapping("/me/preferences")
-    public PreferencesDto replaceMyPreferences(@CurrentAccount Account account, @Valid @RequestBody PreferencesDto input) {
+    public PreferencesDto replaceMyPreferences(@CurrentAccount CurrentAccountDto account, @Valid @RequestBody PreferencesDto input) {
         return profileService.replacePreferences(account, input);
     }
 
     @GetMapping("/me/dashboard")
-    public DashboardDto getMyDashboard(@CurrentAccount Account account) {
+    public DashboardDto getMyDashboard(@CurrentAccount CurrentAccountDto account) {
         return profileService.getDashboard(account);
     }
 
     @GetMapping("/me/progress")
-    public ProgressDto getMyProgress(@CurrentAccount Account account) {
+    public ProgressDto getMyProgress(@CurrentAccount CurrentAccountDto account) {
         return profileService.getProgress(account);
     }
 }

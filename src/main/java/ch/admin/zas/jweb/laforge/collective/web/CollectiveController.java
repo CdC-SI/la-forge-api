@@ -11,7 +11,7 @@ import ch.admin.zas.jweb.laforge.collective.service.CollectiveService;
 import ch.admin.zas.jweb.laforge.common.idempotency.Idempotent;
 import ch.admin.zas.jweb.laforge.common.page.Page;
 import ch.admin.zas.jweb.laforge.common.page.PageQuery;
-import ch.admin.zas.jweb.laforge.security.domain.Account;
+import ch.admin.zas.jweb.laforge.security.dto.CurrentAccountDto;
 import ch.admin.zas.jweb.laforge.security.web.CurrentAccount;
 import jakarta.validation.Valid;
 import java.util.UUID;
@@ -37,36 +37,36 @@ public class CollectiveController {
     @PostMapping("/challenges")
     @ResponseStatus(HttpStatus.CREATED)
     @Idempotent
-    public ChallengeCreatedDto createChallenge(@CurrentAccount Account account, @Valid @RequestBody ChallengeInput input) {
+    public ChallengeCreatedDto createChallenge(@CurrentAccount CurrentAccountDto account, @Valid @RequestBody ChallengeInput input) {
         return collectiveService.createChallenge(account, input);
     }
 
     @GetMapping("/me/challenges")
     public Page<ChallengeDto> listMyChallenges(
-            @CurrentAccount Account account,
+            @CurrentAccount CurrentAccountDto account,
             @RequestParam(required = false) Integer limit,
             @RequestParam(required = false) String cursor) {
         return collectiveService.listMyChallenges(account, PageQuery.of(limit, cursor));
     }
 
     @PostMapping("/challenges/join")
-    public ChallengeDto joinChallenge(@CurrentAccount Account account, @Valid @RequestBody JoinChallengeInput input) {
+    public ChallengeDto joinChallenge(@CurrentAccount CurrentAccountDto account, @Valid @RequestBody JoinChallengeInput input) {
         return collectiveService.joinChallenge(account, input.joinCode());
     }
 
     @GetMapping("/challenges/{challengeId}")
-    public ChallengeDto getChallenge(@CurrentAccount Account account, @PathVariable UUID challengeId) {
+    public ChallengeDto getChallenge(@CurrentAccount CurrentAccountDto account, @PathVariable UUID challengeId) {
         return collectiveService.getChallenge(account, challengeId);
     }
 
     @PostMapping("/challenges/{challengeId}/close")
-    public ChallengeDto closeChallenge(@CurrentAccount Account account, @PathVariable UUID challengeId) {
+    public ChallengeDto closeChallenge(@CurrentAccount CurrentAccountDto account, @PathVariable UUID challengeId) {
         return collectiveService.closeChallenge(account, challengeId);
     }
 
     @GetMapping("/challenges/{challengeId}/responses")
     public Page<SharedResponseDto> listSharedResponses(
-            @CurrentAccount Account account,
+            @CurrentAccount CurrentAccountDto account,
             @PathVariable UUID challengeId,
             @RequestParam(required = false) Integer limit,
             @RequestParam(required = false) String cursor) {
@@ -75,7 +75,7 @@ public class CollectiveController {
 
     @GetMapping("/challenges/{challengeId}/comments")
     public Page<DiscussionCommentDto> listChallengeComments(
-            @CurrentAccount Account account,
+            @CurrentAccount CurrentAccountDto account,
             @PathVariable UUID challengeId,
             @RequestParam(required = false) Integer limit,
             @RequestParam(required = false) String cursor) {
@@ -86,7 +86,7 @@ public class CollectiveController {
     @ResponseStatus(HttpStatus.CREATED)
     @Idempotent
     public DiscussionCommentDto createChallengeComment(
-            @CurrentAccount Account account, @PathVariable UUID challengeId, @Valid @RequestBody CommentInput input) {
+            @CurrentAccount CurrentAccountDto account, @PathVariable UUID challengeId, @Valid @RequestBody CommentInput input) {
         return collectiveService.createChallengeComment(account, challengeId, input.body());
     }
 }

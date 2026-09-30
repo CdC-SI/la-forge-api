@@ -6,7 +6,7 @@ import ch.admin.zas.jweb.laforge.common.page.Page;
 import ch.admin.zas.jweb.laforge.common.page.PageQuery;
 import ch.admin.zas.jweb.laforge.practice.domain.AttemptStatus;
 import ch.admin.zas.jweb.laforge.practice.repository.AttemptRepository;
-import ch.admin.zas.jweb.laforge.security.domain.Account;
+import ch.admin.zas.jweb.laforge.security.dto.CurrentAccountDto;
 import ch.admin.zas.jweb.laforge.tutor.domain.TutorExchange;
 import ch.admin.zas.jweb.laforge.tutor.dto.TutorExchangeDto;
 import ch.admin.zas.jweb.laforge.tutor.repository.TutorExchangeRepository;
@@ -39,7 +39,7 @@ public class TutorService {
      * @throws NotFoundException     si la tentative n'existe pas ou n'appartient pas à l'appelant
      * @throws InvalidStateException si la tentative n'est pas encore soumise
      */
-    public Page<TutorExchangeDto> listTutorExchanges(Account account, UUID attemptId, PageQuery pageQuery) {
+    public Page<TutorExchangeDto> listTutorExchanges(CurrentAccountDto account, UUID attemptId, PageQuery pageQuery) {
         var attempt = requireSubmittedOwnedAttempt(account, attemptId);
         var items = tutorExchangeRepository.findByAttemptIdOrderByCreatedAtAscIdAsc(attempt.getId()).stream()
                 .map(TutorExchangeDto::from)
@@ -54,15 +54,15 @@ public class TutorService {
      * @throws ch.admin.zas.jweb.laforge.common.error.AiUnavailableException si le fournisseur IA est indisponible (503, toujours en v1)
      */
     @Transactional
-    public TutorExchangeDto askTutor(Account account, UUID attemptId, String question) {
+    public TutorExchangeDto askTutor(CurrentAccountDto account, UUID attemptId, String question) {
         var attempt = requireSubmittedOwnedAttempt(account, attemptId);
         var answer = tutorPort.answer(attempt, question);
         var exchange = new TutorExchange(attempt, question, answer.markdown(), answer.sources());
         return TutorExchangeDto.from(tutorExchangeRepository.save(exchange));
     }
 
-    private ch.admin.zas.jweb.laforge.practice.domain.Attempt requireSubmittedOwnedAttempt(Account account, UUID attemptId) {
-        var attempt = attemptRepository.findByIdAndLearner_Id(attemptId, account.getId())
+    private ch.admin.zas.jweb.laforge.practice.domain.Attempt requireSubmittedOwnedAttempt(CurrentAccountDto account, UUID attemptId) {
+        var attempt = attemptRepository.findByIdAndLearner_Id(attemptId, account.id())
                 .orElseThrow(() -> new NotFoundException("Tentative introuvable."));
         if (attempt.getStatus() != AttemptStatus.SUBMITTED) {
             throw new InvalidStateException("Le tuteur exige une tentative déjà soumise.");

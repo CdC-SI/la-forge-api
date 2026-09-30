@@ -38,6 +38,8 @@ import ch.admin.zas.jweb.laforge.review.domain.ReviewReason;
 import ch.admin.zas.jweb.laforge.review.repository.ReviewItemRepository;
 import ch.admin.zas.jweb.laforge.practice.repository.AttemptRepository;
 import ch.admin.zas.jweb.laforge.security.domain.Account;
+import ch.admin.zas.jweb.laforge.security.dto.CurrentAccountDto;
+import ch.admin.zas.jweb.laforge.security.repository.AccountRepository;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -74,6 +76,8 @@ class PracticeServiceTest {
     private ChallengeRepository challengeRepository;
     @Mock
     private ChallengeParticipantRepository challengeParticipantRepository;
+    @Mock
+    private AccountRepository accountRepository;
 
     private final Clock clock = Clock.fixed(NOW_INSTANT, ZoneOffset.UTC);
     private PracticeService service;
@@ -82,7 +86,7 @@ class PracticeServiceTest {
     void setUp() {
         service = new PracticeService(
                 attemptRepository, exerciseVersionRepository, reviewItemRepository, challengeRepository,
-                challengeParticipantRepository, clock);
+                challengeParticipantRepository, accountRepository, clock);
     }
 
     private static void setId(Object entity, UUID id) {
@@ -93,6 +97,10 @@ class PracticeServiceTest {
         var account = new Account("learner@example.com", "hash", "Apprenant");
         setId(account, UUID.randomUUID());
         return account;
+    }
+
+    private static CurrentAccountDto current(Account account) {
+        return CurrentAccountDto.from(account);
     }
 
     private static ExerciseVersion newSingleChoiceVersion(String correctChoiceId, List<Hint> hints) {
@@ -124,7 +132,7 @@ class PracticeServiceTest {
         when(attemptRepository.findByIdAndLearner_Id(attempt.getId(), learner.getId())).thenReturn(Optional.of(attempt));
 
         var answer = new SingleChoiceAnswer("A", "raisonnement", 5);
-        var dto = service.submitAttempt(learner, attempt.getId(), answer);
+        var dto = service.submitAttempt(current(learner), attempt.getId(), answer);
 
         assertThat(dto.status()).isEqualTo(AttemptStatus.SUBMITTED);
         assertThat(attempt.getObjectiveResult()).isEqualTo(ObjectiveResult.CORRECT);
@@ -141,7 +149,7 @@ class PracticeServiceTest {
                 .thenReturn(Optional.empty());
 
         var answer = new SingleChoiceAnswer("B", "raisonnement", 5);
-        var dto = service.submitAttempt(learner, attempt.getId(), answer);
+        var dto = service.submitAttempt(current(learner), attempt.getId(), answer);
 
         assertThat(dto.status()).isEqualTo(AttemptStatus.SUBMITTED);
         assertThat(attempt.getObjectiveResult()).isEqualTo(ObjectiveResult.INCORRECT);
@@ -162,7 +170,7 @@ class PracticeServiceTest {
                 .thenReturn(Optional.empty());
 
         var answer = new SingleChoiceAnswer("A", "raisonnement", 2);
-        service.submitAttempt(learner, attempt.getId(), answer);
+        service.submitAttempt(current(learner), attempt.getId(), answer);
 
         assertThat(attempt.getObjectiveResult()).isEqualTo(ObjectiveResult.CORRECT);
         var captor = ArgumentCaptor.forClass(ReviewItem.class);
@@ -180,8 +188,8 @@ class PracticeServiceTest {
         when(attemptRepository.findByIdAndLearner_Id(attempt.getId(), learner.getId())).thenReturn(Optional.of(attempt));
 
         var answer = new SingleChoiceAnswer("A", "raisonnement", 5);
-        var firstDto = service.submitAttempt(learner, attempt.getId(), answer);
-        var secondDto = service.submitAttempt(learner, attempt.getId(), answer);
+        var firstDto = service.submitAttempt(current(learner), attempt.getId(), answer);
+        var secondDto = service.submitAttempt(current(learner), attempt.getId(), answer);
 
         assertThat(secondDto).isEqualTo(firstDto);
         verify(reviewItemRepository, never()).save(any());
@@ -194,10 +202,10 @@ class PracticeServiceTest {
         var attempt = newAttempt(learner, version, null, null, OffsetDateTime.now(clock).minusMinutes(5));
         when(attemptRepository.findByIdAndLearner_Id(attempt.getId(), learner.getId())).thenReturn(Optional.of(attempt));
 
-        service.submitAttempt(learner, attempt.getId(), new SingleChoiceAnswer("A", "raisonnement", 5));
+        service.submitAttempt(current(learner), attempt.getId(), new SingleChoiceAnswer("A", "raisonnement", 5));
 
         assertThrows(InvalidStateException.class,
-                () -> service.submitAttempt(learner, attempt.getId(), new SingleChoiceAnswer("B", "autre", 5)));
+                () -> service.submitAttempt(current(learner), attempt.getId(), new SingleChoiceAnswer("B", "autre", 5)));
     }
 
     @Test
@@ -208,7 +216,7 @@ class PracticeServiceTest {
         when(attemptRepository.findByIdAndLearner_Id(attempt.getId(), learner.getId())).thenReturn(Optional.of(attempt));
 
         var mismatchedAnswer = new MultipleChoiceAnswer(List.of("A"), "raisonnement", 5);
-        assertThrows(ValidationFailedException.class, () -> service.submitAttempt(learner, attempt.getId(), mismatchedAnswer));
+        assertThrows(ValidationFailedException.class, () -> service.submitAttempt(current(learner), attempt.getId(), mismatchedAnswer));
     }
 
     @Test
@@ -221,7 +229,7 @@ class PracticeServiceTest {
         var linkedReviewItem = mock(ReviewItem.class);
         when(reviewItemRepository.findById(reviewItemId)).thenReturn(Optional.of(linkedReviewItem));
 
-        service.submitAttempt(learner, attempt.getId(), new SingleChoiceAnswer("A", "raisonnement", 5));
+        service.submitAttempt(current(learner), attempt.getId(), new SingleChoiceAnswer("A", "raisonnement", 5));
 
         verify(linkedReviewItem).complete(OffsetDateTime.now(clock));
     }
@@ -233,7 +241,7 @@ class PracticeServiceTest {
         var learner = newAccount();
         var input = new CreateAttemptInput(UUID.randomUUID(), 1, UUID.randomUUID(), UUID.randomUUID());
 
-        assertThrows(BadRequestException.class, () -> service.createAttempt(learner, input));
+        assertThrows(BadRequestException.class, () -> service.createAttempt(current(learner), input));
     }
 
     @Test
@@ -243,7 +251,7 @@ class PracticeServiceTest {
         var input = new CreateAttemptInput(exerciseId, 1, null, null);
         when(exerciseVersionRepository.findByExercise_IdAndVersionNumber(exerciseId, 1)).thenReturn(Optional.empty());
 
-        assertThrows(NotFoundException.class, () -> service.createAttempt(learner, input));
+        assertThrows(NotFoundException.class, () -> service.createAttempt(current(learner), input));
     }
 
     @Test
@@ -256,7 +264,7 @@ class PracticeServiceTest {
         when(attemptRepository.existsByLearner_IdAndExerciseVersion_IdAndStatus(learner.getId(), version.getId(), AttemptStatus.IN_PROGRESS))
                 .thenReturn(true);
 
-        assertThrows(InvalidStateException.class, () -> service.createAttempt(learner, input));
+        assertThrows(InvalidStateException.class, () -> service.createAttempt(current(learner), input));
     }
 
     // --- setSelfAssessment -------------------------------------------------
@@ -290,7 +298,7 @@ class PracticeServiceTest {
         when(reviewItemRepository.findBySourceAttempt_Id(attempt.getId())).thenReturn(Optional.empty());
         when(reviewItemRepository.save(any(ReviewItem.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        var dto = service.setSelfAssessment(learner, attempt.getId(), mastery, "note");
+        var dto = service.setSelfAssessment(current(learner), attempt.getId(), mastery, "note");
 
         assertThat(dto.dueAt()).isEqualTo(OffsetDateTime.now(clock).plusDays(expectedDays));
         assertThat(dto.reason()).isEqualTo(ReviewReason.SELF_ASSESSMENT);
@@ -313,7 +321,7 @@ class PracticeServiceTest {
         when(reviewItemRepository.findBySourceAttempt_Id(attempt.getId())).thenReturn(Optional.of(existingReviewItem));
         when(attemptRepository.findByReviewItemId(existingReviewItem.getId())).thenReturn(Optional.of(attempt));
 
-        service.setSelfAssessment(learner, attempt.getId(), SelfAssessmentMastery.HARD, "note repetee");
+        service.setSelfAssessment(current(learner), attempt.getId(), SelfAssessmentMastery.HARD, "note repetee");
 
         verify(existingReviewItem, never()).reschedule(any(), any());
     }
@@ -335,7 +343,7 @@ class PracticeServiceTest {
         when(reviewItemRepository.findBySourceAttempt_Id(attempt.getId())).thenReturn(Optional.of(existingReviewItem));
         when(attemptRepository.findByReviewItemId(existingReviewItem.getId())).thenReturn(Optional.of(attempt));
 
-        service.setSelfAssessment(learner, attempt.getId(), SelfAssessmentMastery.EASY, "nouvelle note");
+        service.setSelfAssessment(current(learner), attempt.getId(), SelfAssessmentMastery.EASY, "nouvelle note");
 
         verify(existingReviewItem, times(1))
                 .reschedule(OffsetDateTime.now(clock).plusDays(21), ReviewReason.SELF_ASSESSMENT);
@@ -350,6 +358,6 @@ class PracticeServiceTest {
         var attempt = newAttempt(learner, version, null, null, OffsetDateTime.now(clock).minusMinutes(5));
         when(attemptRepository.findByIdAndLearner_Id(attempt.getId(), learner.getId())).thenReturn(Optional.of(attempt));
 
-        assertThrows(ValidationFailedException.class, () -> service.revealHint(learner, attempt.getId(), 2));
+        assertThrows(ValidationFailedException.class, () -> service.revealHint(current(learner), attempt.getId(), 2));
     }
 }

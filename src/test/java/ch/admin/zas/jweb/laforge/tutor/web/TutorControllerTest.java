@@ -13,6 +13,7 @@ import ch.admin.zas.jweb.laforge.common.web.MaxRequestBodySizeFilter;
 import ch.admin.zas.jweb.laforge.common.web.SecurityHeadersFilter;
 import ch.admin.zas.jweb.laforge.security.config.SecurityConfig;
 import ch.admin.zas.jweb.laforge.security.domain.Account;
+import ch.admin.zas.jweb.laforge.security.dto.CurrentAccountDto;
 import ch.admin.zas.jweb.laforge.security.repository.AccountRepository;
 import ch.admin.zas.jweb.laforge.tutor.dto.TutorExchangeDto;
 import ch.admin.zas.jweb.laforge.tutor.service.TutorService;
@@ -62,7 +63,7 @@ class TutorControllerTest {
         var attemptId = UUID.randomUUID();
         var dto = new TutorExchangeDto(
                 UUID.randomUUID(), "Pourquoi ?", "Réponse.", List.of(), OffsetDateTime.now(), false);
-        when(tutorService.askTutor(any(Account.class), eq(attemptId), eq("Pourquoi ?"))).thenReturn(dto);
+        when(tutorService.askTutor(any(CurrentAccountDto.class), eq(attemptId), eq("Pourquoi ?"))).thenReturn(dto);
 
         var body = """
                 {"question":"Pourquoi ?"}

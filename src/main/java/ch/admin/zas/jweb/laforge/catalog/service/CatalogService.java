@@ -6,9 +6,11 @@ import ch.admin.zas.jweb.laforge.catalog.domain.Topic;
 import ch.admin.zas.jweb.laforge.catalog.dto.ExerciseDto;
 import ch.admin.zas.jweb.laforge.catalog.dto.ExerciseSummaryDto;
 import ch.admin.zas.jweb.laforge.catalog.dto.TopicDto;
+import ch.admin.zas.jweb.laforge.catalog.dto.TopicInput;
 import ch.admin.zas.jweb.laforge.catalog.repository.ExerciseVersionRepository;
 import ch.admin.zas.jweb.laforge.catalog.repository.TopicRepository;
 import ch.admin.zas.jweb.laforge.common.domain.Difficulty;
+import ch.admin.zas.jweb.laforge.common.error.InvalidStateException;
 import ch.admin.zas.jweb.laforge.common.error.NotFoundException;
 import ch.admin.zas.jweb.laforge.common.page.CursorCodec;
 import ch.admin.zas.jweb.laforge.common.page.KeysetPredicates;
@@ -19,6 +21,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.data.domain.PageRequest;
@@ -39,6 +42,23 @@ public class CatalogService {
     public CatalogService(TopicRepository topicRepository, ExerciseVersionRepository exerciseVersionRepository) {
         this.topicRepository = topicRepository;
         this.exerciseVersionRepository = exerciseVersionRepository;
+    }
+
+    /**
+     * Ajoute un thème au référentiel ; l'identifiant est généré à l'insertion.
+     *
+     * @throws InvalidStateException si le slug est déjà utilisé
+     */
+    @Transactional
+    public TopicDto createTopic(TopicInput input) {
+        if (topicRepository.existsBySlug(input.slug())) {
+            throw new InvalidStateException("Un thème existe déjà avec ce slug.");
+        }
+        try {
+            return TopicDto.from(topicRepository.saveAndFlush(new Topic(input.slug(), input.label())));
+        } catch (DataIntegrityViolationException concurrentInsert) {
+            throw new InvalidStateException("Un thème existe déjà avec ce slug.");
+        }
     }
 
     /** Thèmes du référentiel, triés par libellé puis id. */

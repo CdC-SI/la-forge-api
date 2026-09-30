@@ -8,6 +8,7 @@ import ch.admin.zas.jweb.laforge.catalog.domain.Hint;
 import ch.admin.zas.jweb.laforge.catalog.domain.ResponseSpec;
 import ch.admin.zas.jweb.laforge.catalog.domain.TechnologyRequirement;
 import ch.admin.zas.jweb.laforge.common.domain.Difficulty;
+import ch.admin.zas.jweb.laforge.common.persistence.BaseEntity;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -27,7 +28,7 @@ public record ExerciseContentInput(
         @NotBlank @Size(max = 200) String title,
         @NotNull ExerciseType type,
         @NotNull Difficulty difficulty,
-        @NotEmpty @Size(max = 20) List<UUID> topicIds,
+        @NotNull @Size(max = 20) List<UUID> topicIds,
         @Min(1) @Max(60) int estimatedMinutes,
         @NotNull @Size(max = 10) List<@Valid TechnologyRequirement> technologies,
         @NotBlank @Size(max = 20000) String promptMarkdown,
@@ -42,7 +43,7 @@ public record ExerciseContentInput(
                 draft.getTitle(),
                 draft.getType(),
                 draft.getDifficulty(),
-                draft.getTopics().stream().map(topic -> topic.getId()).toList(),
+                draft.getTopics().stream().map(BaseEntity::getId).toList(),
                 draft.getEstimatedMinutes(),
                 draft.getTechnologies(),
                 draft.getPromptMarkdown(),
